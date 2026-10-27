@@ -1,0 +1,51 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run the version-matching tests
+        run: bash scripts/radar.sh --selftest
+
+      - name: Build the app
+        run: bash app/build.sh "$GITHUB_WORKSPACE/dist"
+
+      - name: Zip the bundle
+        working-directory: dist
+        # ditto preserves the bundle's signature and resource forks; plain zip does not.
+        run: ditto -c -k --keepParent VulnRadar.app VulnRadar.app.zip
+
+      - name: Checksum
+        working-directory: dist
+        run: shasum -a 256 VulnRadar.app.zip | tee VulnRadar.app.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VulnRadar
+          path: dist/VulnRadar.app.zip
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/VulnRadar.app.zip
+            dist/VulnRadar.app.zip.sha256
+          body: |
+            The app is ad-hoc signed, not notarised. macOS blocks the first launch.
+
+            Right-click the app and choose **Open**, or run:
+
+            ```
+            xattr -dr com.apple.quarantine /Applications/VulnRadar.app
+            ```
