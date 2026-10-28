@@ -8,6 +8,10 @@ advisory feed, builds a dependency graph of every project you have, and tells yo
 your projects a new advisory lands in. A sweep of ~220 projects and ~15,000 packages takes
 about 20 seconds.
 
+![VulnRadar scanning a folder of projects and reporting what needs action](docs/demo.gif)
+
+*A scan start to finish, sped up 3x. [Full resolution](docs/demo.mp4).*
+
 - **Version ranges, not names.** A package is reported only when the version you actually
   have falls inside a published vulnerable range.
 - **Ranked by whether you must act.** A critical in a dev dependency of an abandoned repo is
