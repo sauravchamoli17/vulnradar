@@ -201,21 +201,24 @@ def normalize(adv):
 def fetch_advisories(ecosystems, days, severities, use_gh):
     since = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
     advisories, errors = {}, []
+    paginate = gh_paginate if use_gh else http_paginate
     for eco in ecosystems:
-        query = f"/advisories?per_page=100&type=reviewed&published=%3E%3D{since}&ecosystem={eco}"
-        if severities:
-            query += "&severity=" + ",".join(severities)
-        try:
-            rows = gh_paginate(query) if use_gh else http_paginate(query)
-        except (RuntimeError, urllib.error.URLError, OSError, ValueError) as exc:
-            errors.append(f"{eco}: {exc}")
-            continue
-        for adv in rows:
-            if not isinstance(adv, dict) or adv.get("withdrawn_at"):
-                continue
-            norm = normalize(adv)
-            if norm["id"]:
-                advisories[norm["id"]] = norm
+        base = f"/advisories?per_page=100&type=reviewed&published=%3E%3D{since}&ecosystem={eco}"
+        # The advisories API rejects a comma-separated severity, so ask once per
+        # severity and let the id map merge the answers.
+        queries = [f"{base}&severity={sev}" for sev in severities] if severities else [base]
+        for query in queries:
+            try:
+                rows = paginate(query)
+            except (RuntimeError, urllib.error.URLError, OSError, ValueError) as exc:
+                errors.append(f"{eco}: {exc}")
+                break
+            for adv in rows:
+                if not isinstance(adv, dict) or adv.get("withdrawn_at"):
+                    continue
+                norm = normalize(adv)
+                if norm["id"]:
+                    advisories[norm["id"]] = norm
     return list(advisories.values()), errors, since
 
 
