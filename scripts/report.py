@@ -550,11 +550,20 @@ def build_render_graph(graph, rows, leads, home):
 
     used_projects = {}
     out_nodes, out_edges = [], []
+    seen_instances = set()
     for tier, project, package, edge in pairs:
         pid = project["id"]
+        instance = f"{pid}||{package['id']}"
+        # One project can reach the same package down more than one edge — a runtime
+        # dependency that is also used by a workflow, or a package named in both the
+        # manifest and the lockfile. Those are one node, and emitting it twice gives d3
+        # a duplicate key, which breaks the join and leaves the canvas empty. The sort
+        # above puts the affected edge first, so the first one wins.
+        if instance in seen_instances:
+            continue
+        seen_instances.add(instance)
         if pid not in used_projects:
             used_projects[pid] = project
-        instance = f"{pid}||{package['id']}"
         node = {
             "id": instance, "cluster": pid, "kind": package["kind"],
             "name": package["name"], "version": package.get("version"),

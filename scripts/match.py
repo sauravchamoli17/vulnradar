@@ -499,6 +499,9 @@ def main():
                   ("fetched_at", "window_days", "published_since", "ecosystems", "auth",
                    "kev_catalog", "errors")},
         "graph_stats": graph.get("stats"),
+        # The scope this result was produced with, so the app can tell when the settings
+        # have moved on since and the numbers on screen describe a different machine.
+        "scope": {"roots": graph.get("roots") or [], "ignored": graph.get("ignored") or []},
         "counts": counts,
         "advisories_considered": len(intel.get("advisories", [])),
         "had_previous_state": bool(previous),

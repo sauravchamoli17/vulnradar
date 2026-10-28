@@ -35,6 +35,11 @@ struct Settings {
 
     /// Scope "folders" means the user picked their code directories; anything else
     /// (or an empty list) falls back to sweeping the whole home folder.
+    /// The same list resolvedRoots joins, kept as an array for comparing against the
+    /// scope a finished scan recorded.
+    static var folderRoots: [String] {
+        scanScope == "folders" && !folders.isEmpty ? folders : [NSHomeDirectory()]
+    }
     static var resolvedRoots: String {
         scanScope == "folders" && !folders.isEmpty ? folders.joined(separator: "\n")
                                                    : NSHomeDirectory()

@@ -52,6 +52,7 @@ struct ContentView: View {
             Divider().overlay(Theme.hairline)
             VStack(spacing: 0) {
                 toolbar
+                ScopeChangedBanner()
                 contentPanel
             }
             .frame(maxWidth: .infinity)
@@ -360,6 +361,53 @@ struct ContentView: View {
         if findings.count(.p0) > 0 { return Band.p0.tint }
         if findings.count(.p1) > 0 { return Band.p1.tint }
         return Theme.good
+    }
+}
+
+/// Changing where the scan looks does not change what is already on screen. Say so, rather
+/// than leaving results from a different scope looking current.
+struct ScopeChangedBanner: View {
+    @EnvironmentObject var store: Store
+    // Read through Settings below, but declared here so changing any of them in the
+    // settings sheet redraws this banner.
+    @AppStorage("roots") private var roots = ""
+    @AppStorage("scanScope") private var scanScope = "home"
+    @AppStorage("ignored") private var ignored = ""
+
+    private var stale: Bool {
+        guard let scope = store.findings?.scope, !store.isScanning else { return false }
+        return !scope.matches(roots: Settings.folderRoots, ignored: Settings.ignoredFolders)
+    }
+
+    var body: some View {
+        if stale {
+            HStack(spacing: Space.s) {
+                Image(systemName: "arrow.triangle.2.circlepath")
+                    .font(.system(size: 11, weight: .medium))
+                Text("Scan scope changed.").bold()
+                + Text(" These results are from the folders the last scan covered.")
+                Spacer(minLength: Space.s)
+                Button { store.scan() } label: {
+                    Text("Rescan").font(TypeScale.ui(11.5, .semibold))
+                        .padding(.horizontal, Space.m).padding(.vertical, 4)
+                        .background(RoundedRectangle(cornerRadius: 6)
+                            .fill(Band.p1.tint.opacity(0.22)))
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+            }
+            .font(TypeScale.caption)
+            .foregroundStyle(Band.p1.tint)
+            .padding(.horizontal, Space.m + 2)
+            .frame(height: 34)
+            .background(Band.p1.tint.opacity(0.10))
+            .overlay(alignment: .bottom) {
+                Rectangle().fill(Band.p1.tint.opacity(0.25)).frame(height: 0.5)
+            }
+            .padding(.leading, Space.m - 1)
+            .padding(.trailing, Space.m)
+            .padding(.top, Space.xs)
+        }
     }
 }
 

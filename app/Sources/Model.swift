@@ -129,6 +129,7 @@ struct Findings: Decodable {
     let installScripts: [String: [String]]?
     let graphStats: GraphStats?
     let intel: Intel?
+    let scope: ScanScope?
 
     static func load(from url: URL) throws -> Findings {
         let decoder = JSONDecoder()
@@ -138,6 +139,23 @@ struct Findings: Decodable {
 
     func count(_ band: Band) -> Int { counts?[band.rawValue] ?? 0 }
     var actionable: Int { count(.p0) + count(.p1) }
+}
+
+/// Where the scan that produced these results was pointed.
+struct ScanScope: Decodable {
+    let roots: [String]?
+    let ignored: [String]?
+
+    /// Older results predate this field, so there is nothing to compare and nothing to warn
+    /// about — claiming staleness we cannot prove would be worse than staying quiet.
+    func matches(roots wanted: [String], ignored skipping: [String]) -> Bool {
+        guard let roots else { return true }
+        let tidy = { (list: [String]) in
+            Set(list.map { ($0 as NSString).expandingTildeInPath }
+                    .map { $0.hasSuffix("/") ? String($0.dropLast()) : $0 })
+        }
+        return tidy(roots) == tidy(wanted) && tidy(ignored ?? []) == tidy(skipping)
+    }
 }
 
 /// One package version to upgrade inside one project.
