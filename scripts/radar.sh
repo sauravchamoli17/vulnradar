@@ -85,15 +85,27 @@ OSV_FLAG=""
 if [ "$DEEP" -eq 1 ]; then
   if command -v osv-scanner >/dev/null 2>&1; then
     step "2b/4 osv-scanner (every advisory ever, not just the window)"
+    # Hand osv-scanner the project directories the inventory already found. Pointing
+    # it at a whole home folder makes it walk from / through every node_modules and
+    # cache, which never finishes.
+    "$PY" - "${OUT}/graph.json" > "${OUT}/projdirs.txt" <<'DIRS'
+import json, sys
+graph = json.load(open(sys.argv[1]))
+for node in graph["nodes"]:
+    if node.get("kind") == "project" and node.get("path"):
+        print(node["path"])
+DIRS
     PARTS=""
     i=0
-    for root in $ROOTS; do
+    while IFS= read -r batch; do
+      [ -n "$batch" ] || continue
       part="${OUT}/osv.part${i}.json"
-      # osv-scanner exits non-zero when it finds vulnerabilities, which is the normal case.
-      osv-scanner scan source -r "$root" --format json --output "$part" >/dev/null 2>&1
+      # shellcheck disable=SC2086
+      osv-scanner scan source $batch --format json --output "$part" >/dev/null 2>&1
       [ -s "$part" ] && PARTS="$PARTS $part"
       i=$((i + 1))
-    done
+    done < <(xargs -n 40 echo < "${OUT}/projdirs.txt")
+    rm -f "${OUT}/projdirs.txt"
     if [ -n "$PARTS" ]; then
       # shellcheck disable=SC2086
       "$PY" - "${OUT}/osv.json" $PARTS <<'MERGE'
@@ -106,7 +118,7 @@ for part in parts:
     except (OSError, ValueError):
         pass
 json.dump({"results": results}, open(out, "w"))
-print(f"osv-scanner: merged {len(results)} source result(s) from {len(parts)} root(s)")
+print(f"osv-scanner: merged {len(results)} source result(s)")
 MERGE
       rm -f "${OUT}"/osv.part*.json
       OSV_FLAG="--osv-results ${OUT}/osv.json"

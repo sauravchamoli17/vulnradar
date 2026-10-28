@@ -149,8 +149,9 @@ RISKY_SCRIPT_PATTERNS = [
      "contacts a bare IP address rather than a hostname"),
     (re.compile(r"\.onion\b", re.I), "contacts a Tor hidden service"),
     (re.compile(r">\s*/dev/tcp/", re.I), "opens a raw TCP socket from the shell"),
-    (re.compile(r"\bnode\s+-e\b[^\n]*child_process", re.I),
-     "spawns a child process from an inline one-liner"),
+    (re.compile(r"\bnode\s+-e\b[^\n]*(child_process|exec)[^\n]*"
+                r"(fetch|https?:|atob|Buffer\.from)", re.I),
+     "inline one-liner that spawns a process and fetches or decodes data"),
     (re.compile(r"process\.env[^\n]{0,80}(fetch|https?\.request|curl)", re.I),
      "reads environment variables next to a network call"),
 ]

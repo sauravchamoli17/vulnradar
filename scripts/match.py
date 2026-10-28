@@ -437,6 +437,17 @@ def main():
     counts = {band: sum(1 for f in findings if f["band"] == band) for band in order}
     alerts = code_alerts(index)
     malware = [f for f in findings if f.get("malware")]
+    # A MAL-* match is serious, but "declared in a lockfile of a dormant project" and
+    # "unpacked in node_modules right now" are very different situations. Say which.
+    for item in malware:
+        for project in item["projects"]:
+            unpacked = Path(project["path"], "node_modules", item["package"]).exists()
+            project["installed_on_disk"] = unpacked
+        item["installed_on_disk"] = any(p.get("installed_on_disk")
+                                        for p in item["projects"])
+        item["dormant_days"] = min(
+            [p["stale_days"] for p in item["projects"] if p.get("stale_days") is not None],
+            default=None)
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "graph_generated_at": graph.get("generated_at"),

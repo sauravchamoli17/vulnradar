@@ -205,15 +205,34 @@ def render_markdown(data, rows, projects, home, nodes):
     w("## Malicious code check")
     w("")
     if malware:
-        w(f"### ⚠️ {len(malware)} KNOWN-MALICIOUS PACKAGE(S) INSTALLED")
+        unpacked_any = any(m.get("installed_on_disk") for m in malware)
+        w(f"### ⚠️ {len(malware)} known-malicious package"
+          + ("s" if len(malware) != 1 else "")
+          + (" unpacked on disk" if unpacked_any else " pinned in a lockfile"))
         w("")
-        w("A `MAL-*` advisory means the ecosystem has marked this package itself as "
-          "malicious. Treat it as a compromise, not a patch: quarantine the project, "
-          "do not run installs or builds, and rotate any credential reachable from it.")
+        w("A `MAL-*` advisory means the ecosystem has marked this package version "
+          "itself as malicious.")
         w("")
         for item in malware[:20]:
+            unpacked = item.get("installed_on_disk")
+            dormant = item.get("dormant_days")
+            state = ("**unpacked in node_modules**" if unpacked
+                     else "declared in the lockfile, not installed")
+            age = (f", last commit {dormant}d ago" if dormant and dormant > 365 else "")
             w(f"- `{item['package']}@{item['installed']}` — {item.get('advisory')} "
-              f"in {', '.join(short(p['path'], home) for p in item['projects'][:3])}")
+              f"({state}{age})")
+            for project in item["projects"][:3]:
+                w(f"  - `{short(project['path'], home)}` "
+                  f"({'direct' if project.get('direct') else 'transitive'})")
+        w("")
+        if any(m.get("installed_on_disk") for m in malware):
+            w("At least one is unpacked on disk. Treat that as a compromise: quarantine "
+              "the project, do not install or build, and rotate any credential "
+              "reachable from it.")
+        else:
+            w("None are unpacked on disk — they are pinned in lockfiles that nothing has "
+              "installed. The risk is realised only if someone runs an install there, so "
+              "bump or remove the pin before anyone does.")
         w("")
     if alerts:
         w(f"### ⚠️ {len(alerts)} suspicious install hook(s)")
@@ -515,7 +534,11 @@ def build_render_graph(graph, rows, leads, home):
         tier = 0 if package["id"] in affected else (1 if package["id"] in direct else 2)
         pairs.append((tier, project, package, edge))
     pairs.sort(key=lambda p: (p[0], -degree[p[2]["id"]]))
-    pairs = pairs[:MAX_INSTANCES]
+    # Affected packages are the point of the graph, so they are never cut; the cap only
+    # trims the clean context around them.
+    required = [p for p in pairs if p[0] == 0]
+    extra = [p for p in pairs if p[0] != 0]
+    pairs = required + extra[:max(0, MAX_INSTANCES - len(required))]
 
     used_projects = {}
     out_nodes, out_edges = [], []
@@ -538,13 +561,16 @@ def build_render_graph(graph, rows, leads, home):
             node["projects"] = len(row["projects"])
             node["fix"] = next((p["fix"] for p in row["projects"]
                                 if p["path"] == project.get("path")), None)
+            # Trimmed: the drawer shows a summary, not an essay, and this payload is
+            # parsed on every graph load.
             node["adv"] = [{
                 "id": a.get("advisory"), "cve": a.get("cve"),
                 "sev": a.get("severity"), "cvss": a.get("cvss"),
-                "epss": a.get("epss"), "sum": a.get("summary"),
+                "epss": a.get("epss"),
+                "sum": (a.get("summary") or "")[:180],
                 "url": a.get("url"), "kev": bool(a.get("kev")),
-                "range": a.get("vulnerable_range"), "why": a.get("why"),
-            } for a in row["advisories"]]
+                "range": a.get("vulnerable_range"),
+            } for a in row["advisories"][:12]]
         out_nodes.append(node)
         out_edges.append({"source": pid, "target": instance, "rel": edge["rel"]})
 
@@ -953,7 +979,7 @@ function showDetail(d) {
     return '<div class="adv"><div class="meta">' + link + bits.join('') + '</div>' +
       '<div class="sum">' + esc(a.sum || '') + '</div>' +
       (a.range ? '<div class="rng">vulnerable: ' + esc(a.range) + '</div>' : '') +
-      (a.why ? '<div class="rng">' + esc(a.why) + '</div>' : '') + '</div>';
+      '</div>';
   }).join('') : '<div class="hint">No advisory matched this package — it is shown for ' +
     'context as part of this dependency set.</div>';
 
@@ -969,7 +995,11 @@ function showDetail(d) {
     '<div class="jump">' + esc(d.version || '') +
     (d.target ? ' &rarr; <span class="to">' + esc(d.target) + '</span>'
               : ' <span style="color:var(--muted)">&rarr; no fix published</span>') + '</div>' +
-    '<div class="chips">' + chips.join('') + '</div>' + body + fix;
+    '<div class="chips">' + chips.join('') + '</div>' +
+    (d.kind === 'project' ? '' :
+      '<div class="hint">Dependabot raises these only for repos on GitHub, and only ' +
+      'if it is switched on for that repo.</div>') +
+    body + fix;
   drawer.classList.add('open');
   relayout();
 
@@ -1060,6 +1090,9 @@ function drawList() {
 }
 
 function select(id) {
+  // A project with no cluster here (filtered out, or not in this scan) would otherwise
+  // leave an empty canvas; fall back to the full view instead.
+  if (id && !clusterById.has(id)) { id = null; }
   focus = id;
   // A focused cluster lays out at the origin. Without reseeding, its nodes keep the
   // coordinates they had in the full grid and fly in from off-screen, so the view
@@ -1155,8 +1188,11 @@ def render_html(data, rows, leads, graph, title, home):
                 f"{stats.get('packages', 0)} packages scanned · "
                 f"advisories since {intel.get('published_since')} · "
                 + ", ".join(f"{b} {counts.get(b, 0)}" for b, _, _ in BANDS))
+    # Advisory text can contain "</script>" — one of them is literally about unescaped
+    # "</style>" — which would close this tag early. Escaping the slash is the standard
+    # guard and stays valid JSON.
     payload = json.dumps({"nodes": nodes, "edges": edges, "clusters": clusters,
-                          "hidden": hidden})
+                          "hidden": hidden}).replace("</", "<\\/")
     return (HTML_TEMPLATE
             .replace("__D3__", d3_script())
             .replace("__DATA__", payload)

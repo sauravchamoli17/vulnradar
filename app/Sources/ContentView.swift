@@ -393,15 +393,23 @@ struct Overview: View {
                         .font(.system(size: 13)).foregroundStyle(Band.p0.tint)
                     Text(malware.isEmpty
                          ? "\(alerts.count) suspicious install hook(s)"
-                         : "\(malware.count) known-malicious package(s) installed")
+                         : malware.contains { $0.installedOnDisk == true }
+                           ? "\(malware.count) known-malicious package(s) unpacked on disk"
+                           : "\(malware.count) known-malicious package(s) pinned in a lockfile")
                         .font(TypeScale.title).foregroundStyle(Theme.text)
                 }
                 Text(malware.isEmpty
                      ? "Lifecycle scripts run automatically on install. Read each one "
                        + "before running a build in these projects."
-                     : "A MAL-* advisory marks the package itself as malicious. Treat it "
-                       + "as a compromise: quarantine the project, do not install or "
-                       + "build, and rotate any credential reachable from it.")
+                     : malware.contains { $0.installedOnDisk == true }
+                       ? "A MAL-* advisory marks the package itself as malicious, and it "
+                         + "is unpacked here. Treat it as a compromise: quarantine the "
+                         + "project, do not install or build, and rotate any credential "
+                         + "reachable from it."
+                       : "A MAL-* advisory marks the package itself as malicious. Nothing "
+                         + "is unpacked on disk — it is pinned in a lockfile nothing has "
+                         + "installed, so the risk lands only if someone runs an install "
+                         + "there. Bump or remove the pin first.")
                     .font(TypeScale.body).foregroundStyle(Theme.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(malware.prefix(4), id: \.self) { item in

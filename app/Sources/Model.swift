@@ -70,6 +70,8 @@ struct Finding: Decodable, Hashable {
     let malware: Bool?
     let new: Bool?
     let source: String?
+    let installedOnDisk: Bool?
+    let dormantDays: Int?
     let projects: [ProjectRef]
 
     /// Window findings were disclosed in the last N days; osv-scanner supplies the
