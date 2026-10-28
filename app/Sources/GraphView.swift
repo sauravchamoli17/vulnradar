@@ -133,8 +133,12 @@ struct GraphPane: View {
         ZStack {
             Theme.contentPanel
             if hasGraph {
+                // A ZStack sizes children to their own ideal size, and a WKWebView has
+                // none worth having — without this it lays out at the frame it was
+                // created with, or at nothing at all, and the pane looks empty.
                 GraphWebView(url: store.graphURL, reloadToken: store.lastScan,
                              focus: focus, status: $status)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 if let status {
                     VStack(spacing: Space.m) {
                         Image(systemName: "exclamationmark.triangle")
