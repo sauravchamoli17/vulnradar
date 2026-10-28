@@ -25,6 +25,16 @@ struct ContentView: View {
         store.projects.compactMap { $0.filtered(age: ageFilter) }
     }
 
+    /// Built once per render rather than inside the ForEach: a Section produced by a
+    /// conditional inside a lazy stack keeps a stale layout when the filter empties and
+    /// refills it, and the rows stop drawing.
+    private var bandSections: [(band: Band, projects: [ProjectGroup])] {
+        Band.allCases.compactMap { band in
+            let group = visible.filter { $0.band == band }
+            return group.isEmpty ? nil : (band, group)
+        }
+    }
+
     private var visible: [ProjectGroup] {
         var list = scoped
         if let bandFilter { list = list.filter { $0.band == bandFilter } }
@@ -163,15 +173,17 @@ struct ContentView: View {
                                 if !collapsed.contains(folder.path) {
                                     ForEach(folder.projects) { projectRow($0) }
                                 }
-                            } header: { folderHeader(folder) }
+                            } header: {
+                                folderHeader(folder, holdsSelection: holds(folder.projects))
+                            }
                         }
                     } else {
-                        ForEach(Band.allCases, id: \.self) { band in
-                            let group = visible.filter { $0.band == band }
-                            if !group.isEmpty {
-                                Section {
-                                    ForEach(group) { projectRow($0) }
-                                } header: { bandHeader(band, count: group.count) }
+                        ForEach(bandSections, id: \.band) { section in
+                            Section {
+                                ForEach(section.projects) { projectRow($0) }
+                            } header: {
+                                bandHeader(section.band, count: section.projects.count,
+                                           holdsSelection: holds(section.projects))
                             }
                         }
                     }
@@ -259,18 +271,19 @@ struct ContentView: View {
             .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
     }
 
-    private func bandHeader(_ band: Band, count: Int) -> some View {
+    private func bandHeader(_ band: Band, count: Int, holdsSelection: Bool) -> some View {
         HStack {
-            SectionLabel(text: band.title)
+            SectionLabel(text: band.title, tint: holdsSelection ? Theme.accent : nil)
             Spacer()
             Text("\(count)").font(TypeScale.micro).foregroundStyle(Theme.tertiary.opacity(0.8))
         }
         .padding(.horizontal, Space.m + 3)
         .padding(.top, Space.m).padding(.bottom, Space.xs)
         .background(.ultraThinMaterial)
+        .overlay(alignment: .leading) { sectionMarker(holdsSelection) }
     }
 
-    private func folderHeader(_ folder: FolderGroup) -> some View {
+    private func folderHeader(_ folder: FolderGroup, holdsSelection: Bool) -> some View {
         let isCollapsed = collapsed.contains(folder.path)
         return Button {
             if isCollapsed { collapsed.remove(folder.path) } else { collapsed.insert(folder.path) }
@@ -281,7 +294,8 @@ struct ContentView: View {
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 GlowDot(color: folder.band.tint, size: 5, glow: false)
                 Text(folder.name).font(TypeScale.micro).tracking(0.5)
-                    .foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
+                    .foregroundStyle(holdsSelection ? Theme.accent : Theme.tertiary)
+                    .lineLimit(1).truncationMode(.head)
                 Spacer()
                 Text("\(folder.projects.count)")
                     .font(TypeScale.micro).foregroundStyle(Theme.tertiary.opacity(0.8))
@@ -289,10 +303,23 @@ struct ContentView: View {
             .padding(.horizontal, Space.m + 3)
             .padding(.top, Space.m).padding(.bottom, Space.xs)
             .background(.ultraThinMaterial)
+            .overlay(alignment: .leading) { sectionMarker(holdsSelection) }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .pointerCursor()
+    }
+
+    /// The accent rail that ties a pinned header to the row selected inside it.
+    private func sectionMarker(_ on: Bool) -> some View {
+        Rectangle().fill(Theme.accent).frame(width: 2)
+            .padding(.vertical, 4)
+            .opacity(on ? 1 : 0)
+    }
+
+    private func holds(_ projects: [ProjectGroup]) -> Bool {
+        guard let selection else { return false }
+        return projects.contains { $0.path == selection }
     }
 
     private func projectRow(_ project: ProjectGroup) -> some View {

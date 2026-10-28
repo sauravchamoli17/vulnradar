@@ -302,11 +302,12 @@ struct Segmented<T: Hashable>: View {
 
 struct SectionLabel: View {
     let text: String
+    var tint: Color?
     var body: some View {
         Text(text.uppercased())
             .font(TypeScale.micro)
             .tracking(0.7)
-            .foregroundStyle(Theme.tertiary)
+            .foregroundStyle(tint ?? Theme.tertiary)
     }
 }
 
