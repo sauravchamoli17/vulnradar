@@ -47,8 +47,8 @@ Use a 600000 ms (10 min) timeout. Common variations:
 
 ```bash
 bash "$RADAR" --roots ~/code --days 7                 # one tree, tighter window
-bash "$RADAR" --ignore ~/old-clients "*/Archive/*"   # skip folders: a path, a bare
-                                                     # directory name, or a glob
+bash "$RADAR" --ignore ~/old-clients --ignore '*/Archive/*'  # skip folders: repeat the flag
+                                                     # for a path, a bare name, or a glob
 bash "$RADAR" --days 3 --severity "high critical"     # "what dropped this week that matters"
 bash "$RADAR" --no-deep                               # skip osv-scanner, window only (faster)
 bash "$RADAR" --out /path/in/session/folder           # so the report opens in the app's file pane

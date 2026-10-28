@@ -56,7 +56,7 @@ It is also a plain CLI:
 ```bash
 bash scripts/radar.sh --days 14                 # everything in your home folder
 bash scripts/radar.sh --roots ~/code --days 7   # one tree, tighter window
-bash scripts/radar.sh --ignore ~/old-clients "*/Archive/*"   # skip what you left behind
+bash scripts/radar.sh --ignore ~/old-clients --ignore '*/Archive/*'   # skip what you left behind
 bash scripts/radar.sh --no-deep                 # skip osv-scanner, advisory window only
 bash scripts/radar.sh --selftest                # version-matching tests
 ```
