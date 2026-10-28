@@ -23,6 +23,41 @@ about 20 seconds.
   host name-matches, which need a human to confirm.
 - **Local.** The only outbound calls are the GitHub Advisory API and the CISA KEV catalog.
 
+## What it reads
+
+Versions come from lockfiles wherever one exists, because a lockfile says what you
+resolved rather than what you asked for.
+
+| Ecosystem | Parsed for versions |
+|-----------|---------------------|
+| npm | `package-lock.json`, `npm-shrinkwrap.json`, `pnpm-lock.yaml`, `yarn.lock`, `bun.lock` |
+| pip | `requirements.txt`, `requirements-dev.txt`, `poetry.lock`, `uv.lock`, `Pipfile.lock` |
+| composer | `composer.lock` |
+| rubygems | `Gemfile.lock` |
+| cargo | `Cargo.lock` |
+| go | `go.mod` |
+| maven | `pom.xml` |
+| pub | `pubspec.lock` |
+| docker | `Dockerfile` base images |
+| runtimes | `.nvmrc`, `.node-version`, `.python-version`, `.ruby-version`, `.tool-versions` |
+
+A manifest with no lockfile beside it — a bare `package.json`, `composer.json`,
+`Cargo.toml`, `Gemfile`, `pyproject.toml` — marks the directory as a project but
+yields no versions to match, so that project reports nothing. `go.sum`,
+`gradle.lockfile`, `mix.lock` and `Package.resolved` are recognised but not yet parsed.
+
+Every finding says whether the package is a **direct** dependency or a **transitive**
+one, per project, in both the app and the report. Treat that as the first thing to
+read: a critical in something you import yourself is a different job from one four
+levels down a tree you never call.
+
+Advisories come from four places:
+
+- **GitHub Global Advisory Database** — the reviewed set, per ecosystem, for the window
+- **CISA KEV** — known-exploited; anything listed is P0
+- **nodejs/security-wg core database** — Node runtime CVEs, which no package feed covers
+- **OSV.dev**, via `osv-scanner` — the full advisory history rather than just the window
+
 ## Install
 
 ```bash
