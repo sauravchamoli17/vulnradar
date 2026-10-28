@@ -8,7 +8,9 @@ import argparse
 import fnmatch
 import json
 import os
+import pathlib
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -670,6 +672,80 @@ PARSERS = {
 }
 
 
+# A GUI app inherits launchd's PATH, not a login shell's, so anything a version manager
+# installs is invisible to a scan started from the app — which is how most scans start.
+# These are where the managers keep the version they would hand you.
+RUNTIME_SHIMS = {
+    "node": ["~/.volta/bin/node", "~/.asdf/shims/node",
+             "~/Library/Application Support/fnm/aliases/default/bin/node",
+             "~/.local/share/mise/shims/node"],
+    "bun": ["~/.bun/bin/bun", "~/.asdf/shims/bun"],
+    "python3": ["~/.pyenv/shims/python3", "~/.asdf/shims/python3",
+                "~/.local/share/mise/shims/python3"],
+    "ruby": ["~/.rbenv/shims/ruby", "~/.rvm/bin/ruby", "~/.asdf/shims/ruby"],
+    "go": ["~/.asdf/shims/go", "/usr/local/go/bin/go"],
+}
+
+
+def nvm_default(home=None):
+    """The node nvm would give you.
+
+    `alias/default` can hold a full version, a release line like `22`, an alias that
+    points at another alias, or `node`/`stable` for the newest. A line resolves to the
+    highest installed version on it, which is what nvm itself does.
+    """
+    base = Path(home or Path.home()) / ".nvm"
+    installed = []
+    versions = base / "versions" / "node"
+    if versions.is_dir():
+        for child in versions.iterdir():
+            parts = child.name.lstrip("v").split(".")
+            if child.is_dir() and parts and all(p.isdigit() for p in parts):
+                installed.append((tuple(int(p) for p in parts), child))
+    if not installed:
+        return None
+    installed.sort()
+
+    def binary(directory):
+        path = directory / "bin" / "node"
+        return str(path) if path.is_file() else None
+
+    value = read(base / "alias" / "default", limit=256)
+    seen = set()
+    while value:
+        value = value.strip()
+        if not value or value in seen:
+            return None
+        seen.add(value)
+        if value in ("node", "stable", "*", "latest"):
+            return binary(installed[-1][1])
+        wanted = value.lstrip("v")
+        if wanted and all(p.isdigit() for p in wanted.split(".")):
+            prefix = tuple(int(p) for p in wanted.split("."))
+            on_line = [d for v, d in installed if v[:len(prefix)] == prefix]
+            if on_line:
+                return binary(on_line[-1])
+        nxt = base / "alias" / value
+        value = read(nxt, limit=256) if nxt.is_file() else None
+    return None
+
+
+def locate(binary):
+    """The binary on PATH, or wherever a version manager is keeping it."""
+    found = shutil.which(binary)
+    if found:
+        return found
+    if binary == "node":
+        found = nvm_default()
+        if found:
+            return found
+    for candidate in RUNTIME_SHIMS.get(binary, []):
+        path = Path(candidate).expanduser()
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
 def ignore_matcher(patterns):
     """Turn the user's ignore list into a predicate over directory paths.
 
@@ -853,7 +929,8 @@ def add_host_layer(graph, include_casks=True):
         ("ruby", ["ruby", "-v"], r"ruby ([0-9][^\s]*)"),
         ("java", ["java", "-version"], r'"([0-9][^"]*)"'),
     ):
-        m = re.search(pattern, sh(args) or "")
+        binary = locate(args[0])
+        m = re.search(pattern, sh([binary] + args[1:]) or "") if binary else None
         if m:
             nid = graph.node(f"rt:{runtime}@{m.group(1)}", kind="runtime", name=runtime,
                              version=m.group(1), ecosystem="runtime", source="installed")
@@ -894,8 +971,58 @@ IGNORE_CASES = [
 ]
 
 
+def _nvm_case(tmp, default, aliases=(), installed=()):
+    """Build a throwaway ~/.nvm layout so the alias walk can be tested off the real one."""
+    base = pathlib.Path(tmp) / ".nvm"
+    (base / "alias").mkdir(parents=True, exist_ok=True)
+    (base / "alias" / "default").write_text(default + "\n")
+    for name, value in aliases:
+        target = base / "alias" / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(value + "\n")
+    for version in installed:
+        binary = base / "versions" / "node" / version / "bin" / "node"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text("#!/bin/sh\n")
+    return tmp
+
+
 def selftest():
     failures = []
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        home = _nvm_case(tmp, "22.22.2", installed=["v22.22.2"])
+        got = nvm_default(home)
+        if not got or not got.endswith("/.nvm/versions/node/v22.22.2/bin/node"):
+            failures.append(f"  nvm_default did not resolve a plain version: {got}")
+    with tempfile.TemporaryDirectory() as tmp:
+        # nvm writes nested aliases like `lts/jod`, and default often points at one.
+        home = _nvm_case(tmp, "lts/jod", aliases=[("lts/jod", "20.19.5")],
+                         installed=["v20.19.5"])
+        got = nvm_default(home)
+        if not got or not got.endswith("/v20.19.5/bin/node"):
+            failures.append(f"  nvm_default did not follow an alias chain: {got}")
+    with tempfile.TemporaryDirectory() as tmp:
+        # What nvm actually writes here most of the time: a release line, not a version.
+        home = _nvm_case(tmp, "22", installed=["v22.9.0", "v22.22.2", "v24.19.0"])
+        got = nvm_default(home)
+        if not got or not got.endswith("/v22.22.2/bin/node"):
+            failures.append(f"  nvm_default did not take the newest on line 22: {got}")
+    with tempfile.TemporaryDirectory() as tmp:
+        home = _nvm_case(tmp, "node", installed=["v22.22.2", "v24.19.0"])
+        got = nvm_default(home)
+        if not got or not got.endswith("/v24.19.0/bin/node"):
+            failures.append(f"  nvm_default did not take the newest for `node`: {got}")
+    with tempfile.TemporaryDirectory() as tmp:
+        home = _nvm_case(tmp, "24.1.0", installed=[])
+        if nvm_default(home) is not None:
+            failures.append("  nvm_default returned a version that is not installed")
+    with tempfile.TemporaryDirectory() as tmp:
+        home = _nvm_case(tmp, "a", aliases=[("a", "b"), ("b", "a")])
+        if nvm_default(home) is not None:
+            failures.append("  nvm_default did not break an alias loop")
+    if nvm_default(tempfile.gettempdir() + "/definitely-not-here") is not None:
+        failures.append("  nvm_default invented a node with no .nvm present")
     for patterns, path, expected in IGNORE_CASES:
         matcher = ignore_matcher(patterns)
         actual = bool(matcher and matcher(Path(os.path.expanduser(path))))
@@ -907,7 +1034,8 @@ def selftest():
         print(f"inventory selftest FAILED ({len(failures)})")
         print("\n".join(failures))
         return 1
-    print(f"inventory selftest ok: {len(IGNORE_CASES)} ignore cases")
+    print(f"inventory selftest ok: {len(IGNORE_CASES)} ignore cases, "
+          "7 nvm-resolution cases")
     return 0
 
 
