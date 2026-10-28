@@ -503,6 +503,30 @@ def render_markdown(data, rows, projects, home, nodes):
                 w(f"```\n{group[0]['fix']}\n```")
                 w("")
 
+    projects_on_node = data.get("project_runtimes") or []
+    if projects_on_node:
+        affected = [r for r in projects_on_node if r.get("advisories")]
+        w(f"### Projects running on a vulnerable node ({len(affected)})")
+        w("")
+        w("Only projects node actually runs: a Lambda, a server, a command. A front end "
+          "declares `engines.node` for its build toolchain, and a core CVE in that "
+          "interpreter never reaches what it ships, so those are left out.")
+        w("")
+        if affected:
+            w("| Project | Runs on | Declares | Advisories | Fixed in |")
+            w("|---|---|---|---|---|")
+            for item in affected:
+                w(f"| `{item['name']}` | `{item['resolved']}` | "
+                  f"`{item['requires']}` ({item['requires_from']}) | "
+                  f"{len(item['advisories'])} | `{item.get('fixed_version') or '—'}` |")
+            w("")
+        unresolved = [r for r in projects_on_node if not r.get("resolved")]
+        for item in unresolved:
+            w(f"- `{item['name']}` asks for `{item['requires']}` and no node installed "
+              "here satisfies it, so nothing could be checked.")
+        if unresolved:
+            w("")
+
     if leads:
         w(f"## Host-layer leads ({len(leads)})")
         w("")

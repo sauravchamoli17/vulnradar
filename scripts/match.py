@@ -16,7 +16,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from vercmp import (cmp_version, highest, in_range, lowest,  # noqa: E402
-                    node_affected, parse_version, selftest)
+                    node_affected, parse_version, satisfies, selftest)
 
 STOPWORDS ={"and", "the", "for", "server", "service", "software", "products", "product",
              "system", "systems", "manager", "suite", "platform", "plugin", "core", "web",
@@ -339,6 +339,83 @@ def match_runtimes(index, intel, kev_by_cve):
     return findings
 
 
+def resolve_node(spec, available):
+    """The node version a project would actually run.
+
+    An exact pin is taken at its word even when it is not installed here — it is what the
+    checkout asks for. A range resolves to the newest installed version that satisfies it.
+    """
+    exact = parse_version(spec)
+    if exact and len(exact[0]) >= 3 and not re.search(r"[<>=^~|x*\s]", str(spec)):
+        return str(spec).lstrip("v")
+    best = None
+    for version in available or []:
+        if satisfies(version, spec) and (best is None or
+                                         cmp_version(parse_version(version),
+                                                     parse_version(best)) > 0):
+            best = version
+    return best
+
+
+def match_project_runtimes(index, intel, graph):
+    """Node advisories against the version each backend project resolves to.
+
+    Only projects node actually runs: a front end declares engines.node for its build
+    toolchain, and a core CVE in that interpreter never reaches what it ships.
+    """
+    advisories = [a for a in (intel.get("runtime_advisories") or [])
+                  if a.get("runtime") == "node"]
+    if not advisories:
+        return []
+    available = graph.get("node_versions") or []
+    out = []
+    for node in index.nodes.values():
+        if node.get("kind") != "project" or not node.get("node_role"):
+            continue
+        spec = node.get("node_requires")
+        if not spec:
+            continue
+        resolved = resolve_node(spec, available)
+        if not resolved:
+            out.append({
+                "type": "project_runtime", "key": f"node-unsatisfied|{node['path']}",
+                "band": "P3", "path": node["path"], "name": node["name"],
+                "role": node["node_role"], "requires": spec,
+                "requires_from": node.get("node_requires_from"),
+                "resolved": None, "advisories": [],
+                "why": f"no node installed here satisfies {spec}",
+            })
+            continue
+        hits = [a for a in advisories
+                if node_affected(resolved, a.get("vulnerable"), a.get("patched"))]
+        if not hits:
+            continue
+        worst = min((RUNTIME_BAND.get(a["severity"], "P3") for a in hits), default="P3")
+        fixed = node_fix_target(
+            max(hits, key=lambda a: a.get("patched") or "").get("patched"), resolved)
+        out.append({
+            "type": "project_runtime",
+            "key": f"node|{node['path']}@{resolved}",
+            # One band softer than the interpreter that is running: this is the version
+            # the project asks for, and a managed host may patch it independently.
+            "band": SOFTEN[worst],
+            "path": node["path"], "name": node["name"], "role": node["node_role"],
+            "requires": spec, "requires_from": node.get("node_requires_from"),
+            "resolved": resolved, "fixed_version": fixed,
+            "stale_days": node.get("stale_days"),
+            "why": f"runs on node {resolved}, which {len(hits)} core advisories affect",
+            "advisories": sorted(
+                ({"id": a["id"], "cve": a.get("cve"), "severity": a["severity"],
+                  "summary": a.get("summary"), "url": a.get("url"),
+                  "fixed": node_fix_target(a.get("patched"), resolved)} for a in hits),
+                key=lambda a: ({"critical": 0, "high": 1, "medium": 2, "low": 3}
+                               .get(a["severity"], 4), a["id"])),
+        })
+    order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    out.sort(key=lambda r: (order[r["band"]], -len(r["advisories"]), r["name"]))
+    return out
+
+
 def match_kev_leads(index, kev_rows, days):
     """KEV carries no version ranges, so host-layer hits are leads for a human to confirm."""
     cutoff = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
@@ -562,6 +639,7 @@ def main():
     findings = dedupe(findings)
     leads = match_kev_leads(index, kev_rows, args.kev_days)
     runtimes = match_runtimes(index, intel, kev_by_cve)
+    project_runtimes = match_project_runtimes(index, intel, graph)
 
     previous = set()
     if args.state and Path(args.state).is_file():
@@ -608,6 +686,7 @@ def main():
         "findings": findings,
         "leads": leads,
         "runtimes": runtimes,
+        "project_runtimes": project_runtimes,
         "alerts": alerts,
         "malware": malware,
         "install_scripts": install_script_summary(index),

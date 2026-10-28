@@ -107,6 +107,29 @@ struct RuntimeFinding: Decodable, Hashable {
     var bandValue: Band { Band(rawValue: band) ?? .p3 }
 }
 
+/// A project node actually runs — a Lambda, a server, a command — on a version that has
+/// core advisories against it. Front ends are excluded: they build with node, not on it.
+struct ProjectRuntime: Decodable, Hashable {
+    let band: String
+    let name: String
+    let path: String
+    let role: String
+    let requires: String
+    let requiresFrom: String?
+    let resolved: String?
+    let fixedVersion: String?
+    let advisories: [RuntimeAdvisory]
+
+    var bandValue: Band { Band(rawValue: band) ?? .p3 }
+}
+
+struct RuntimeAdvisory: Decodable, Hashable {
+    let id: String
+    let cve: String?
+    let severity: String?
+    let summary: String?
+}
+
 struct Lead: Decodable, Hashable {
     let cve: String
     let vendor: String?
@@ -150,6 +173,7 @@ struct Findings: Decodable {
     let intel: Intel?
     let scope: ScanScope?
     let runtimes: [RuntimeFinding]?
+    let projectRuntimes: [ProjectRuntime]?
 
     static func load(from url: URL) throws -> Findings {
         let decoder = JSONDecoder()

@@ -249,6 +249,95 @@ NODE_CASES = [
 ]
 
 
+def _bump(release, index):
+    parts = list(release[:index + 1]) + [0] * max(0, index + 1 - len(release))
+    parts[index] += 1
+    return (tuple(parts), [])
+
+
+def _comparators(token):
+    """One npm range token as a list of (op, parsed version) that must all hold."""
+    token = token.strip()
+    if not token or token in ("*", "x", "X"):
+        return []
+    m = re.match(r"^(>=|<=|==|=|>|<|\^|~)?\s*v?(.+)$", token)
+    if not m:
+        return None
+    op, raw = m.group(1) or "=", m.group(2)
+    wild = re.match(r"^(\d+)(?:\.(\d+))?\.(?:x|X|\*)$", raw)
+    if wild:
+        raw = wild.group(1) + ("." + wild.group(2) if wild.group(2) else "")
+        op = "=" if op == "=" else op
+    parsed = parse_version(raw)
+    if parsed is None:
+        return None
+    release = parsed[0]
+    if op in ("^", "~") or (op == "=" and len(release) < 3):
+        # A caret keeps the leftmost non-zero component; a tilde and a partial version
+        # keep everything the author wrote. Either way it is a half-open interval.
+        if op == "^":
+            index = next((i for i, part in enumerate(release) if part), len(release) - 1)
+        elif op == "~":
+            index = min(1, len(release) - 1)
+        else:
+            index = len(release) - 1
+        return [(">=", parsed), ("<", _bump(release, index))]
+    return [(op if op != "==" else "=", parsed)]
+
+
+def satisfies(version, spec):
+    """Does this version satisfy an npm-style range such as `>=24.0.0` or `20.x || 22.x`?"""
+    target = parse_version(version)
+    if target is None or spec is None:
+        return False
+    spec = str(spec).strip()
+    if not spec:
+        # No declared range is not the same as "anything goes": callers should only ask
+        # about a requirement that exists, so say no rather than quietly matching.
+        return False
+    if spec in ("*", "x", "latest"):
+        return True
+    for alternative in spec.split("||"):
+        tokens = [t for t in re.split(r"\s+", alternative.strip()) if t]
+        if not tokens:
+            continue
+        checks = []
+        broken = False
+        for token in tokens:
+            part = _comparators(token)
+            if part is None:
+                broken = True
+                break
+            checks.extend(part)
+        if broken:
+            continue
+        if all(OPS[op](cmp_version(target, bound)) for op, bound in checks):
+            return True
+    return False
+
+
+SATISFIES_CASES = [
+    ("24.19.0", ">=24.0.0", True),
+    ("22.22.2", ">=24.0.0", False),
+    ("22.22.2", ">=20", True),
+    ("20.17.0", ">=20.17.0", True),
+    ("20.16.9", ">=20.17.0", False),
+    ("24.19.0", "24.x", True),
+    ("25.0.0", "24.x", False),
+    ("22.22.2", "20.x || 22.x", True),
+    ("21.0.0", "20.x || 22.x", False),
+    ("22.5.0", "^22.1.0", True),
+    ("23.0.0", "^22.1.0", False),
+    ("22.1.5", "~22.1.0", True),
+    ("22.2.0", "~22.1.0", False),
+    ("22.22.2", ">=20 <24", True),
+    ("24.1.0", ">=20 <24", False),
+    ("22.22.2", "*", True),
+    ("22.22.2", "", False),
+    ("22.22.2", "not-a-range", False),
+]
+
+
 def selftest():
     failures = []
     for version, spec, expected in RANGE_CASES:
@@ -261,6 +350,10 @@ def selftest():
             failures.append(f"  expected {lower} < {higher}")
     if highest(["1.2.3", "1.10.0", "main", "1.9.9"]) != "1.10.0":
         failures.append("  highest() picked the wrong version")
+    for version, spec, expected in SATISFIES_CASES:
+        actual = satisfies(version, spec)
+        if actual != expected:
+            failures.append(f"  satisfies({version!r}, {spec!r}) = {actual}, want {expected}")
     for version, vulnerable, patched, expected in NODE_CASES:
         actual = node_affected(version, vulnerable, patched)
         if actual != expected:
@@ -271,7 +364,8 @@ def selftest():
         print("\n".join(failures))
         return 1
     print(f"vercmp selftest ok: {len(RANGE_CASES)} range cases, "
-          f"{len(ORDER_CASES)} ordering cases, {len(NODE_CASES)} node-runtime cases")
+          f"{len(ORDER_CASES)} ordering, {len(NODE_CASES)} node-runtime, "
+          f"{len(SATISFIES_CASES)} range-satisfaction")
     return 0
 
 

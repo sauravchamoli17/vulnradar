@@ -90,7 +90,9 @@ across repos, and `MAL-*` malicious-package advisories.
 Coverage is the GitHub Advisory DB, so vulnerabilities with no advisory for the ecosystem are
 out of scope — except the Node.js runtime, which is version-matched against Node's own core
 advisory database, since those CVEs carry no package ecosystem and no package upgrade clears
-them. Other runtimes and OS packages are still name-matched leads only. Reachability is inferred from dependency type, commit recency and whether the
+them. That covers both the interpreter on this machine and the version each backend project
+resolves to; front ends are excluded, since they build with node rather than run on it. Other
+runtimes and OS packages are still name-matched leads only. Reachability is inferred from dependency type, commit recency and whether the
 dependency tree is on disk, not from call graphs. That last signal only works for ecosystems
 that install into the project (npm, Composer, bundled Ruby) — Go, Maven, Cargo and a default
 pip resolve into shared caches, so they are left unknown rather than called clean. `bun.lockb` is binary and unreadable; the report names any it skipped.

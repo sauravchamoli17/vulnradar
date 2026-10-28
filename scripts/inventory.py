@@ -188,6 +188,89 @@ def install_state(directory, files):
     return {"known": known, "present": False}
 
 
+def installed_node_versions():
+    """Every node this machine could run, newest last."""
+    found = {}
+    versions = Path.home() / ".nvm" / "versions" / "node"
+    if versions.is_dir():
+        for child in versions.iterdir():
+            parts = child.name.lstrip("v").split(".")
+            if child.is_dir() and parts and all(part.isdigit() for part in parts):
+                found[child.name.lstrip("v")] = tuple(int(part) for part in parts)
+    binary = locate("node")
+    if binary:
+        try:
+            out = subprocess.run([binary, "-v"], capture_output=True, text=True, timeout=20)
+            m = re.search(r"v?([0-9][^\s]*)", out.stdout or "")
+        except (OSError, subprocess.SubprocessError):
+            m = None
+        if m:
+            parts = m.group(1).split(".")
+            if all(part.isdigit() for part in parts):
+                found[m.group(1)] = tuple(int(part) for part in parts)
+    return [v for v, _ in sorted(found.items(), key=lambda kv: kv[1])]
+
+
+def node_facts(directory, files):
+    """What this project asks of node, and whether node is what runs it."""
+    if "package.json" not in files:
+        return {}
+    manifest = load_json(Path(directory) / "package.json")
+    if not isinstance(manifest, dict):
+        return {}
+    spec, source = node_requirement(directory, manifest)
+    role = node_runtime_role(directory, manifest)
+    if not spec and not role:
+        return {}
+    return {"node_requires": spec, "node_requires_from": source, "node_role": role}
+
+
+SERVER_FRAMEWORKS = {
+    "express", "fastify", "koa", "@hapi/hapi", "hapi", "@nestjs/core", "restify",
+    "hono", "h3", "polka", "apollo-server", "@apollo/server", "serverless-http",
+    "socket.io", "@trpc/server", "micro",
+}
+SERVERLESS_MANIFESTS = ("serverless.ts", "serverless.yml", "serverless.yaml",
+                        "template.yaml", "template.yml")
+
+
+def node_runtime_role(directory, manifest):
+    """Does this project run *on* node, or merely build with it?
+
+    A Next.js app declares engines.node for its toolchain, but the browser runs what it
+    emits, so a core CVE in the local interpreter does not reach it. A Lambda or a server
+    executes on node itself. Script contents are useless for telling them apart — plenty
+    of front ends shell out to `node` in a build script — so this asks for positive
+    evidence of something that runs: a deployment manifest, a server framework, or a
+    command the package installs.
+    """
+    path = Path(directory)
+    for name in SERVERLESS_MANIFESTS:
+        if (path / name).is_file():
+            return "serverless"
+    deps = set((manifest.get("dependencies") or {}))
+    deps |= set((manifest.get("devDependencies") or {}))
+    hit = sorted(deps & SERVER_FRAMEWORKS)
+    if hit:
+        return f"server:{hit[0]}"
+    if manifest.get("bin"):
+        return "cli"
+    return None
+
+
+def node_requirement(directory, manifest):
+    """The node a project asks for, and where it said so."""
+    path = Path(directory)
+    for name in (".nvmrc", ".node-version"):
+        text = read(path / name, limit=64)
+        if text and text.strip():
+            return text.strip(), name
+    spec = (manifest.get("engines") or {}).get("node")
+    if spec and str(spec).strip():
+        return str(spec).strip(), "engines"
+    return None, None
+
+
 def build_policy(directory, files):
     """Can a dependency execute code at install time here, and which ones?
 
@@ -1078,7 +1161,8 @@ def main():
             stale_days=days_since(meta.get("git_last_commit")),
             dependabot=dependabot_config(directory),
             build_policy=build_policy(directory, files),
-            install_state=install_state(directory, files), **meta,
+            install_state=install_state(directory, files),
+            **node_facts(directory, files), **meta,
         )
         graph.edge(host, proj, "contains")
         has_lock = any(f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",
@@ -1106,6 +1190,7 @@ def main():
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "roots": [str(Path(r).expanduser().resolve()) for r in args.roots],
         "ignored": list(args.ignore),
+        "node_versions": installed_node_versions(),
         "depth": args.depth,
         "stats": {
             "nodes": len(graph.nodes), "edges": len(graph.edges),

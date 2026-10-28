@@ -645,8 +645,30 @@ struct Overview: View {
                             Spacer(minLength: 0)
                         }
                     }
+                    let onNode = (store.findings?.projectRuntimes ?? [])
+                        .filter { !$0.advisories.isEmpty }
+                    if !onNode.isEmpty {
+                        Divider().overlay(Theme.hairline).padding(.vertical, 2)
+                        ForEach(onNode.prefix(4), id: \.path) { item in
+                            HStack(spacing: Space.s) {
+                                GlowDot(color: item.bandValue.tint, size: 6, glow: false)
+                                Text(item.name).font(TypeScale.strong)
+                                    .foregroundStyle(Theme.text).lineLimit(1)
+                                Text("runs on \(item.resolved ?? "?")")
+                                    .font(TypeScale.mono).foregroundStyle(Theme.secondary)
+                                if let fix = item.fixedVersion {
+                                    Text("\u{2192} \(fix)").font(TypeScale.mono)
+                                        .foregroundStyle(Theme.good)
+                                }
+                                Spacer(minLength: 0)
+                                Text("\(item.advisories.count)")
+                                    .font(TypeScale.mono).foregroundStyle(Theme.tertiary)
+                            }
+                        }
+                    }
                     Text("Core advisories for the interpreter \u{2014} no package upgrade "
-                         + "clears these.")
+                         + "clears these. Projects listed are ones node runs, not ones "
+                         + "that build with it.")
                         .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
                         .padding(.top, 2)
                 }

@@ -116,8 +116,11 @@ rotate every credential reachable from it.
   (OS packages beyond KEV name-matching, vendored code, binaries) are out of scope. The one
   exception is the Node.js runtime: Node core CVEs have no package ecosystem, so they are pulled
   from Node's own advisory database and version-matched separately, reported under `runtimes`.
-  Only exact versions are matched — the installed interpreter, and a full `X.Y.Z` in `.nvmrc`.
-  An `engines` range like `>=20` names no single version and is skipped rather than read as 20.0.0.
+  Only exact versions are matched for the machine's own interpreter. Projects are handled
+  separately under `project_runtimes`: each one node actually *runs* — a Lambda, a server, a
+  package with a `bin` — has its declared range resolved against the versions installed here
+  and matched against that. A front end is left out: it declares `engines.node` for its build
+  toolchain, and a core CVE in that interpreter never reaches what it ships.
 - `--days N` is a disclosure window, not a full audit. Something disclosed before the window and
   never patched will not appear — run `--deep` for full advisory history.
 - Reachability is inferred from dependency type and commit recency, not from call graphs. A P2 in
