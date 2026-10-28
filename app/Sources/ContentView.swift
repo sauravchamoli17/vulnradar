@@ -583,6 +583,17 @@ struct ProjectDetail: View {
                         .foregroundStyle(Theme.accent)
                 }
             }
+            if let note = project.dependabot?.note {
+                HStack(spacing: 6) {
+                    Image(systemName: project.dependabot?.covered == true
+                          ? "arrow.up.forward.square" : "binoculars")
+                        .font(.system(size: 10))
+                    Text(note).font(TypeScale.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .foregroundStyle(Theme.tertiary)
+                .padding(.top, 2)
+            }
         }
     }
 
@@ -657,6 +668,17 @@ struct PackageCard: View {
                         Text("NEW").font(.system(size: 9, weight: .bold)).tracking(0.4)
                             .foregroundStyle(Theme.accent)
                     }
+                    if let origin = item.originLabel {
+                        Text(origin)
+                            .font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                            .foregroundStyle(item.viaWindow ? Band.p1.tint : Theme.tertiary)
+                            .padding(.horizontal, 4).padding(.vertical, 1.5)
+                            .background((item.viaWindow ? Band.p1.tint : Theme.tertiary)
+                                .opacity(0.14), in: RoundedRectangle(cornerRadius: 3))
+                            .help(item.viaWindow
+                                  ? "Disclosed inside the advisory window"
+                                  : "Older advisory, found by osv-scanner")
+                    }
                     Spacer()
                     Button {
                         withAnimation(.easeOut(duration: 0.14)) { expanded.toggle() }
@@ -705,6 +727,10 @@ struct PackageCard: View {
                 if adv.kev == true {
                     Text("KEV").font(.system(size: 9.5, weight: .bold))
                         .foregroundStyle(Band.p0.tint)
+                }
+                if adv.fromOSV {
+                    Text("osv").font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(Theme.tertiary)
                 }
                 Spacer()
             }

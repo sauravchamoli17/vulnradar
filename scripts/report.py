@@ -89,6 +89,8 @@ def group_findings(findings):
             # reach: no GHSA id, no published fix, or a malicious-package advisory.
             "dependabot_reachable": any(a.get("dependabot_reachable", True)
                                         for a in advisories),
+            "via_window": any(a.get("source") != "osv-scanner" for a in advisories),
+            "via_osv": any(a.get("source") == "osv-scanner" for a in advisories),
         })
     rows.sort(key=lambda r: (ORDER[r["band"]], -r["worst_cvss"], r["package"]))
     return rows
@@ -187,6 +189,10 @@ def render_markdown(data, rows, projects, home, nodes):
     w(f"- **KEV catalog** {intel.get('kev_catalog')} (CISA known-exploited)")
     w(f"- **Result** {total} findings in {len(projects)} project(s) — "
       + ", ".join(f"{band} {counts.get(band, 0)}" for band, _, _ in BANDS))
+    recent = sum(1 for f in data.get("findings", []) if f.get("source") != "osv-scanner")
+    backlog = total - recent
+    w(f"- **Recent vs backlog** {recent} disclosed in the window, {backlog} older "
+      "advisories found by osv-scanner")
     if data.get("had_previous_state"):
         w(f"- **New since last run** {sum(1 for r in rows if r['new'])} package(s)")
     for err in intel.get("errors") or []:
@@ -288,8 +294,9 @@ def render_markdown(data, rows, projects, home, nodes):
         else:
             w("🔭 Not a git repo — nothing else is watching this.")
         w("")
-        w("| | Package | Installed | Upgrade to | How it is pulled in | Advisories |")
-        w("|---|---|---|---|---|---|")
+        w("| | Package | Installed | Upgrade to | How it is pulled in | Age | "
+          "Advisories |")
+        w("|---|---|---|---|---|---|---|")
         for item in entry["items"]:
             mark = {"P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "⚪"}[item["band"]]
             how = ("direct" if item["direct"] else "transitive")
@@ -302,8 +309,11 @@ def render_markdown(data, rows, projects, home, nodes):
                             for a in item["advisories"][:2])
             if len(item["advisories"]) > 2:
                 ids += f" +{len(item['advisories']) - 2}"
+            origin = ("recent" if item["via_window"] and not item["via_osv"]
+                      else "backlog" if item["via_osv"] and not item["via_window"]
+                      else "both")
             w(f"| {mark} | `{item['package']}` | `{item['installed']}` | "
-              f"`{item['target'] or '—'}` | {how} | {ids} |")
+              f"`{item['target'] or '—'}` | {how} | {origin} | {ids} |")
         w("")
         w("```bash")
         for line in project_fix_block(entry, home):

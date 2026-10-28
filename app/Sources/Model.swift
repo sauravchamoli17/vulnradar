@@ -15,6 +15,35 @@ enum Band: String, CaseIterable, Comparable {
     static func < (a: Band, b: Band) -> Bool { a.rank < b.rank }
 }
 
+struct DependabotState: Decodable, Hashable {
+    let state: String
+    let repo: String?
+    let number: Int?
+    let url: String?
+
+    /// One plain sentence about whether anything else will raise these.
+    var note: String? {
+        switch state {
+        case "github":
+            return repo.map {
+                "Dependabot will flag and raise these itself if it is turned on for \($0)."
+            }
+        case "pr":
+            return number.map { "Dependabot already has PR #\($0) open for this repo." }
+        case "alert":
+            return "Dependabot already has open alerts for this repo."
+        case "not-github":
+            return "Remote is not GitHub — Dependabot will not see these."
+        case "no-repo":
+            return "Not a git repo — nothing else is watching this."
+        default:
+            return nil
+        }
+    }
+
+    var covered: Bool { state == "github" || state == "pr" || state == "alert" }
+}
+
 struct ProjectRef: Decodable, Hashable {
     let path: String
     let name: String
@@ -22,6 +51,7 @@ struct ProjectRef: Decodable, Hashable {
     let direct: Bool?
     let staleDays: Int?
     let fix: String
+    let dependabot: DependabotState?
 }
 
 struct Finding: Decodable, Hashable {
@@ -39,7 +69,12 @@ struct Finding: Decodable, Hashable {
     let kev: Bool?
     let malware: Bool?
     let new: Bool?
+    let source: String?
     let projects: [ProjectRef]
+
+    /// Window findings were disclosed in the last N days; osv-scanner supplies the
+    /// rest of the advisory history, which is backlog rather than news.
+    var fromOSV: Bool { source == "osv-scanner" }
 
     var bandValue: Band { Band(rawValue: band) ?? .p3 }
 }
@@ -98,6 +133,17 @@ struct PackageItem: Identifiable, Hashable {
     let kev: Bool
     let isNew: Bool
     let advisories: [Finding]
+
+    var viaWindow: Bool { advisories.contains { !$0.fromOSV } }
+    var viaOSV: Bool { advisories.contains { $0.fromOSV } }
+
+    /// What to call this on the card: freshly disclosed, or long-standing backlog.
+    var originLabel: String? {
+        if viaWindow && viaOSV { return "RECENT + BACKLOG" }
+        if viaWindow { return "RECENT" }
+        if viaOSV { return "BACKLOG" }
+        return nil
+    }
 }
 
 struct ProjectGroup: Identifiable, Hashable {
@@ -106,6 +152,7 @@ struct ProjectGroup: Identifiable, Hashable {
     let name: String
     let staleDays: Int?
     let items: [PackageItem]
+    let dependabot: DependabotState?
 
     var band: Band { items.map(\.band).min() ?? .p3 }
     var kev: Bool { items.contains { $0.kev } }
@@ -163,7 +210,8 @@ struct ProjectGroup: Identifiable, Hashable {
                          staleDays: entry.ref.staleDays,
                          items: entry.items.sorted {
                              $0.band == $1.band ? $0.package < $1.package : $0.band < $1.band
-                         })
+                         },
+                         dependabot: entry.ref.dependabot)
         }.sorted {
             if $0.band != $1.band { return $0.band < $1.band }
             if $0.items.count != $1.items.count { return $0.items.count > $1.items.count }

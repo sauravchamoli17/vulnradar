@@ -103,10 +103,11 @@ def dependabot_state(coverage, project, package):
     """
     slug = project.get("github")
     if not slug:
-        return {"state": "not-github"}
+        return {"state": "no-repo" if not project.get("git_remote") else "not-github"}
     repo = (coverage or {}).get(slug)
     if not repo or not repo.get("readable"):
-        return {"state": "unknown", "repo": slug}
+        # No live lookup (it is opt-in): say what is true of any GitHub repo.
+        return {"state": "github", "repo": slug}
     key = package.lower()
     pr = (repo.get("prs") or {}).get(key)
     if pr:
