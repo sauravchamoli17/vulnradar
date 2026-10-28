@@ -609,6 +609,10 @@ struct ProjectDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 header
+                Text("Dependabot raises these only for repos on GitHub, and only if it "
+                     + "is switched on for that repo.")
+                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
                 VStack(spacing: Space.s) {
                     ForEach(project.items) { PackageCard(item: $0) }
                 }
@@ -722,15 +726,16 @@ struct PackageCard: View {
                         Text("NEW").font(.system(size: 9, weight: .bold)).tracking(0.4)
                             .foregroundStyle(Theme.accent)
                     }
-                    if item.dependabotCovered {
-                        Text("DEPENDABOT")
-                            .font(.system(size: 8.5, weight: .bold)).tracking(0.5)
-                            .foregroundStyle(Theme.accent)
-                            .padding(.horizontal, 4).padding(.vertical, 1.5)
-                            .background(Theme.accent.opacity(0.14),
-                                        in: RoundedRectangle(cornerRadius: 3))
-                            .help("On GitHub — Dependabot will raise this too if enabled")
-                    }
+                    Text(item.dependabotCovered ? "DEPENDABOT" : "NO DEPENDABOT")
+                        .font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                        .foregroundStyle(item.dependabotCovered ? Theme.accent
+                                                                : Band.p1.tint)
+                        .padding(.horizontal, 4).padding(.vertical, 1.5)
+                        .background((item.dependabotCovered ? Theme.accent : Band.p1.tint)
+                            .opacity(0.14), in: RoundedRectangle(cornerRadius: 3))
+                        .help(item.dependabotCovered
+                              ? "This repo is on GitHub, so Dependabot can raise it"
+                              : "Not a GitHub repo — Dependabot will never raise this")
                     if let origin = item.originLabel {
                         Text(origin)
                             .font(.system(size: 8.5, weight: .bold)).tracking(0.5)

@@ -337,6 +337,9 @@ def render_markdown(data, rows, projects, home, nodes):
         w("")
 
         covered = bool((nodes.get(entry["path"]) or {}).get("github"))
+        w("_Dependabot raises these only for repos on GitHub, and only if it is "
+          "switched on for that repo._")
+        w("")
         w("| | Package | Installed | Upgrade to | How it is pulled in | Age | "
           "Dependabot | Advisories |")
         w("|---|---|---|---|---|---|---|---|")
@@ -357,7 +360,7 @@ def render_markdown(data, rows, projects, home, nodes):
                       else "both")
             w(f"| {mark} | `{item['package']}` | `{item['installed']}` | "
               f"`{item['target'] or '—'}` | {how} | {origin} | "
-              f"{'✓' if covered else '—'} | {ids} |")
+              f"{'✓' if covered else '✗'} | {ids} |")
         w("")
         w("```bash")
         for line in project_fix_block(entry, home):
@@ -693,6 +696,9 @@ __D3__
   .chip.dep { color: var(--proj);
     border-color: color-mix(in srgb, var(--proj) 45%, transparent);
     background: color-mix(in srgb, var(--proj) 13%, transparent); }
+  .chip.nodep { color: var(--p1);
+    border-color: color-mix(in srgb, var(--p1) 45%, transparent);
+    background: color-mix(in srgb, var(--p1) 13%, transparent); }
   .chip.kev { color: var(--p0); border-color: color-mix(in srgb, var(--p0) 45%, transparent);
     background: color-mix(in srgb, var(--p0) 13%, transparent); font-weight: 600; }
   .adv { border-top: 1px solid var(--line); padding: 11px 0; }
@@ -923,9 +929,12 @@ function showDetail(d) {
     (d.rel === 'dev' ? ', dev' : d.rel === 'ci_uses' ? ', CI' : '') + '</span>');
   if (d.ecosystem) chips.push('<span class="chip">' + esc(d.ecosystem) + '</span>');
   if (d.shared > 1) chips.push('<span class="chip">in ' + d.shared + ' projects</span>');
-  if (d.kind !== 'project' && cluster && cluster.github) {
-    chips.push('<span class="chip dep" title="On GitHub as ' + esc(cluster.github) +
-      ' — Dependabot will raise this too if enabled">dependabot</span>');
+  if (d.kind !== 'project') {
+    chips.push(cluster && cluster.github
+      ? '<span class="chip dep" title="On GitHub as ' + esc(cluster.github) +
+        ' — Dependabot can raise this if it is switched on there">dependabot</span>'
+      : '<span class="chip nodep" title="Not a GitHub repo — Dependabot will never ' +
+        'raise this">no dependabot</span>');
   }
 
   const body = advisories.length ? advisories.map(a => {
