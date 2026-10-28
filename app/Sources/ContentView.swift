@@ -651,6 +651,15 @@ struct ProjectDetail: View {
             HStack(spacing: 6) {
                 Text(displayPath).font(TypeScale.mono).foregroundStyle(Theme.tertiary)
                     .textSelection(.enabled)
+                Button { store.reveal(path: project.path) } label: {
+                    Image(systemName: "folder")
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("Open this folder in Finder")
                 if let stale = project.staleDays {
                     Text("· last commit \(stale)d ago").font(TypeScale.caption)
                         .foregroundStyle(Theme.tertiary)
