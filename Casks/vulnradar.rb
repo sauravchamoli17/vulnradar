@@ -14,10 +14,11 @@ cask "vulnradar" do
   app "VulnRadar.app"
 
   # The build is ad-hoc signed, so strip the quarantine flag on install.
-  postflight do
-    system_command "/usr/bin/xattr",
-                   args: ["-dr", "com.apple.quarantine", "#{appdir}/VulnRadar.app"],
-                   sudo: false
+  # `appdir` is not in scope inside this block and there is no {{appdir}} token, so the
+  # app is reached by changing into it instead of naming its full path.
+  postflight_steps do
+    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "."],
+        chdir: "VulnRadar.app"
   end
 
   zap trash: [
