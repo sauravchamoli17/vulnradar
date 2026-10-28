@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from vercmp import in_range, selftest  # noqa: E402
+from vercmp import cmp_version, highest, in_range, lowest, parse_version, selftest  # noqa: E402
 
 STOPWORDS ={"and", "the", "for", "server", "service", "software", "products", "product",
              "system", "systems", "manager", "suite", "platform", "plugin", "core", "web",
@@ -95,6 +95,28 @@ def rank(severity, kev, reach, confident):
     return "P3", f"{sev} severity, limited exposure"
 
 
+def dependabot_state(coverage, project, package):
+    """Whether Dependabot has this one covered, and how far it has got.
+
+    An open PR means the user can merge instead of fixing. An alert with no PR means
+    GitHub flagged it but nothing is coming — the work is still theirs.
+    """
+    slug = project.get("github")
+    if not slug:
+        return {"state": "not-github"}
+    repo = (coverage or {}).get(slug)
+    if not repo or not repo.get("readable"):
+        return {"state": "unknown", "repo": slug}
+    key = package.lower()
+    pr = (repo.get("prs") or {}).get(key)
+    if pr:
+        return {"state": "pr", "repo": slug, "number": pr["number"], "url": pr["url"]}
+    ghsa = (repo.get("alerts") or {}).get(key)
+    if ghsa:
+        return {"state": "alert", "repo": slug, "ghsa": [g for g in ghsa if g][:3]}
+    return {"state": "none", "repo": slug}
+
+
 def fix_command(ecosystem, project, name, fixed):
     manifests = project.get("manifests") or []
     target = f"{name}@{fixed}" if fixed else name
@@ -128,6 +150,7 @@ def fix_command(ecosystem, project, name, fixed):
 
 
 def match_advisories(index, intel, kev_by_cve):
+    coverage = intel.get("coverage") or {}
     findings = []
     for adv in intel.get("advisories", []):
         for affected in adv.get("affected", []):
@@ -154,6 +177,7 @@ def match_advisories(index, intel, kev_by_cve):
                         "direct": bool(edge.get("direct")),
                         "stale_days": project.get("stale_days"),
                         "fix": fix_command(eco, project, affected["name"], affected.get("fixed")),
+                        "dependabot": dependabot_state(coverage, project, affected["name"]),
                     })
                 findings.append({
                     "type": "finding",
@@ -211,8 +235,25 @@ def match_kev_leads(index, kev_rows, days):
     return leads
 
 
-def ingest_osv(path, index):
-    """Merge `osv-scanner --format json` output: full advisory history, not just the window."""
+def osv_fix_target(vuln, package, installed):
+    """Smallest published fix above the installed version, across the affected ranges."""
+    candidates = []
+    for affected in vuln.get("affected") or []:
+        if (affected.get("package") or {}).get("name", package) != package:
+            continue
+        for rng in affected.get("ranges") or []:
+            for event in rng.get("events") or []:
+                fixed = event.get("fixed")
+                if fixed:
+                    candidates.append(fixed)
+    current = parse_version(installed)
+    higher = [c for c in candidates
+              if parse_version(c) and current and cmp_version(parse_version(c), current) > 0]
+    return lowest(higher) or highest(candidates)
+
+
+def ingest_osv(path, index, coverage=None):
+    """Merge `osv-scanner --format json`: the full advisory history, not just the window."""
     try:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -229,46 +270,61 @@ def ingest_osv(path, index):
             name, version = pkg.get("name"), pkg.get("version")
             if not name or not version:
                 continue
+
+            worst = {}
+            for group in entry.get("groups", []) or []:
+                try:
+                    score = float(group.get("max_severity") or "")
+                except (TypeError, ValueError):
+                    score = None
+                for vid in group.get("ids") or []:
+                    worst[vid] = score
+
             node_id = f"pkg:{eco}:{name}@{version}"
             consumers = index.consumers(node_id)
             reach = reachability(consumers) if consumers else {
                 "runtime": True, "ci_only": False, "dev_only": False,
                 "active": True, "runtime_active": True}
-            for group in entry.get("groups", []) or []:
-                ids = group.get("ids") or []
-                severity = (group.get("max_severity") or "")
-                try:
-                    score = float(severity)
-                except (TypeError, ValueError):
-                    score = None
+
+            for vuln in entry.get("vulnerabilities", []) or []:
+                vid = vuln.get("id")
+                aliases = [vid] + list(vuln.get("aliases") or [])
+                score = worst.get(vid)
                 sev = ("critical" if score and score >= 9 else "high" if score and score >= 7
                        else "medium" if score and score >= 4 else "low" if score else "unknown")
-                malware = any(str(i).startswith("MAL-") for i in ids)
+                malware = str(vid).startswith("MAL-")
                 band, why = rank("critical" if malware else sev, False, reach, True)
                 if malware:
                     band, why = "P0", "MALICIOUS PACKAGE advisory (MAL-*) — treat as compromise"
+                ghsa = next((a for a in aliases if str(a).startswith("GHSA-")), None)
+                fixed = osv_fix_target(vuln, name, version)
                 findings.append({
                     "type": "finding", "source": "osv-scanner",
-                    "key": f"{ids[0] if ids else 'osv'}|{eco}:{name}@{version}",
+                    "key": f"{vid}|{eco}:{name}@{version}",
                     "band": band, "why": why,
-                    "advisory": ids[0] if ids else None, "cve": next(
-                        (i for i in ids if str(i).startswith("CVE-")), None),
-                    "aliases": ids, "severity": sev, "cvss": score,
+                    "advisory": ghsa or vid,
+                    "cve": next((a for a in aliases if str(a).startswith("CVE-")), None),
+                    "aliases": aliases, "severity": sev, "cvss": score,
                     "malware": malware,
-                    "summary": f"{', '.join(map(str, ids[:3]))} affects {name} {version}",
-                    "url": f"https://osv.dev/vulnerability/{ids[0]}" if ids else None,
+                    "summary": (vuln.get("summary") or vuln.get("details") or "")[:400],
+                    "url": f"https://osv.dev/vulnerability/{vid}",
                     "kev": False, "ecosystem": eco, "package": name, "installed": version,
-                    "vulnerable_range": "see advisory", "fixed_version": None,
+                    "vulnerable_range": "see advisory", "fixed_version": fixed,
+                    # Dependabot draws on the GitHub Advisory DB and needs a version to
+                    # bump to; without a GHSA id or a published fix it cannot act.
+                    "dependabot_reachable": bool(ghsa) and bool(fixed) and not malware,
                     "confident": True, "reach": reach,
                     "projects": ([{"path": project["path"], "name": project["name"],
                                    "rel": edge["rel"], "direct": bool(edge.get("direct")),
                                    "stale_days": project.get("stale_days"),
-                                   "fix": fix_command(eco, project, name, None)}
+                                   "fix": fix_command(eco, project, name, fixed),
+                                   "dependabot": dependabot_state(coverage, project, name)}
                                   for project, edge in consumers]
                                  or [{"path": source, "name": Path(source).parent.name,
                                       "rel": "depends_on", "direct": False,
                                       "stale_days": None,
-                                      "fix": f"upgrade {name} (currently {version})"}]),
+                                      "fix": f"upgrade {name} (currently {version})",
+                                      "dependabot": {"state": "unknown"}}]),
                 })
     return findings
 
@@ -310,7 +366,7 @@ def main():
 
     findings = match_advisories(index, intel, kev_by_cve)
     if args.osv_results:
-        findings += ingest_osv(args.osv_results, index)
+        findings += ingest_osv(args.osv_results, index, intel.get("coverage") or {})
     findings = dedupe(findings)
     leads = match_kev_leads(index, kev_rows, args.kev_days)
 

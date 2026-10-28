@@ -15,6 +15,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
@@ -74,6 +75,65 @@ def http_paginate(path, max_pages=10):
             break
         url = nxt.group(1)
     return rows
+
+
+def gh_json(path, timeout=60):
+    out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=timeout)
+    if out.returncode != 0:
+        return None
+    try:
+        return json.loads(out.stdout or "null")
+    except ValueError:
+        return None
+
+
+def repo_coverage(slug):
+    """What Dependabot already knows about this repo.
+
+    An open alert means GitHub is flagging it; an open PR means the fix is one merge
+    away. They are different settings — a repo can raise alerts and still open no PRs
+    — and that difference decides whether the user has work to do.
+    """
+    alerts = gh_json(f"repos/{slug}/dependabot/alerts?state=open&per_page=100")
+    if alerts is None:
+        return {"readable": False, "alerts": {}, "prs": {}}
+    by_package = {}
+    for alert in alerts:
+        name = (((alert or {}).get("dependency") or {}).get("package") or {}).get("name")
+        ghsa = ((alert or {}).get("security_advisory") or {}).get("ghsa_id")
+        if name:
+            by_package.setdefault(name.lower(), []).append(ghsa)
+
+    prs = {}
+    try:
+        out = subprocess.run(
+            ["gh", "pr", "list", "--repo", slug, "--author", "app/dependabot",
+             "--state", "open", "--json", "number,title,url", "--limit", "100"],
+            capture_output=True, text=True, timeout=60)
+        if out.returncode == 0:
+            for pr in json.loads(out.stdout or "[]"):
+                # "Bump undici from 7.25.0 to 7.30.1" / "chore(deps): bump undici ..."
+                m = re.search(r"\bbump\s+([^\s]+)\s+from\b", pr.get("title", ""), re.I)
+                if m:
+                    prs[m.group(1).lower()] = {"number": pr["number"], "url": pr["url"]}
+    except (subprocess.SubprocessError, ValueError, OSError):
+        pass
+    return {"readable": True, "alerts": by_package, "prs": prs}
+
+
+def fetch_coverage(graph_path):
+    """Dependabot state per GitHub repo present in the graph."""
+    try:
+        graph = json.loads(Path(graph_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    slugs = sorted({n["github"] for n in graph.get("nodes", [])
+                    if n.get("kind") == "project" and n.get("github")})
+    if not slugs:
+        return {}
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(repo_coverage, slugs))
+    return dict(zip(slugs, results))
 
 
 def normalize(adv):
@@ -153,6 +213,9 @@ def main():
                     choices=["low", "medium", "high", "critical"])
     ap.add_argument("--graph", help="restrict ecosystems to those present in this graph")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--dependabot-status", action="store_true",
+                    help="look up live Dependabot alerts and PRs per repo (needs gh "
+                         "access to each repo; off by default)")
     ap.add_argument("--quiet", action="store_true")
     args = ap.parse_args()
 
@@ -165,6 +228,13 @@ def main():
 
     use_gh = have_gh()
     advisories, errors, since = fetch_advisories(ecosystems, args.days, args.severity, use_gh)
+
+    coverage = {}
+    if use_gh and args.graph and args.dependabot_status:
+        try:
+            coverage = fetch_coverage(args.graph)
+        except Exception as exc:
+            errors.append(f"dependabot coverage: {exc}")
 
     kev, kev_version = [], None
     try:
@@ -181,6 +251,7 @@ def main():
         "advisories": advisories,
         "kev": kev,
         "kev_catalog": kev_version,
+        "coverage": coverage,
         "errors": errors,
     }
     out = Path(args.out)
@@ -196,6 +267,12 @@ def main():
         print(f"advisories: {len(advisories)} published since {since} ({sev or 'none'})")
         print(f"ecosystems queried: {', '.join(ecosystems)}  [auth: {payload['auth']}]")
         print(f"kev catalog: {len(kev)} known-exploited CVEs (version {kev_version})")
+        if coverage:
+            readable = [v for v in coverage.values() if v["readable"]]
+            alerting = sum(1 for v in readable if v["alerts"])
+            prs = sum(len(v["prs"]) for v in readable)
+            print(f"dependabot: {len(readable)}/{len(coverage)} repos readable, "
+                  f"{alerting} with open alerts, {prs} open PR(s)")
         if errors:
             print("warnings:")
             for err in errors[:8]:

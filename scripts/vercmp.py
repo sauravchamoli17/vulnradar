@@ -124,6 +124,18 @@ def highest(versions):
     return best
 
 
+def lowest(versions):
+    """The smallest parseable version in the list, or None."""
+    best = best_parsed = None
+    for version in versions:
+        parsed = parse_version(version)
+        if parsed is None:
+            continue
+        if best_parsed is None or cmp_version(parsed, best_parsed) < 0:
+            best, best_parsed = version, parsed
+    return best
+
+
 RANGE_CASES = [
     ("1.2.3", ">= 1.0.0, < 2.0.0", True),
     ("2.0.0", ">= 1.0.0, < 2.0.0", False),

@@ -85,6 +85,10 @@ def group_findings(findings):
             "worst_cvss": max((a.get("cvss") or 0) for a in advisories),
             "reach": advisories[0].get("reach", {}),
             "confident": all(a.get("confident", True) for a in advisories),
+            # False only when every advisory for this package is out of Dependabot's
+            # reach: no GHSA id, no published fix, or a malicious-package advisory.
+            "dependabot_reachable": any(a.get("dependabot_reachable", True)
+                                        for a in advisories),
         })
     rows.sort(key=lambda r: (ORDER[r["band"]], -r["worst_cvss"], r["package"]))
     return rows
@@ -214,60 +218,48 @@ def render_markdown(data, rows, projects, home, nodes):
     buckets = {"alone": [], "partial": [], "covered": [], "unknown": []}
     for entry in projects:
         buckets[coverage(nodes.get(entry["path"]))[0]].append(entry)
-    w("## Dependabot overlap")
+    w("## Dependabot")
     w("")
-    total = len(projects)
-    covered = len(buckets["covered"])
-    uncovered = len(buckets["alone"]) + len(buckets["partial"])
     w("These advisories come from the GitHub Advisory Database, the same source "
-      "Dependabot uses. Nothing below is hidden on the grounds that Dependabot might "
-      "also report it — this only marks which projects something else is watching, so "
-      "you know where you are on your own.")
+      "Dependabot uses. **For any project whose repo is on GitHub, Dependabot will "
+      "flag and raise these itself if you have it switched on for that repo** — so "
+      "check there before fixing by hand.")
     w("")
-    if covered == 0:
-        w(f"**Nothing here is currently being reported by Dependabot.** All {total} "
-          "affected project(s) either sit outside GitHub or have Dependabot PRs "
-          "switched off or unconfigured, so this scan is the only thing surfacing them.")
-    elif uncovered == 0:
-        w(f"**All {total} affected project(s) look covered by Dependabot**, so treat "
-          "this as a second opinion and a machine-wide roll-up rather than news.")
-    else:
-        w(f"**{uncovered} of {total} affected project(s) are not covered**, and "
-          f"{covered} look duplicated by Dependabot.")
-    w("")
-    w("| | Projects | What it means |")
-    w("|---|---|---|")
-    w(f"| 🔭 | {len(buckets['alone'])} | Not on GitHub, or not a git repo — nothing "
-      "else is watching |")
-    w(f"| ◐ | {len(buckets['partial'])} | On GitHub, but Dependabot PRs are off or "
-      "unconfigured |")
-    w(f"| ✓ | {len(buckets['covered'])} | Dependabot likely reports these too |")
-    w("")
+    w(f"- {len(buckets['covered']) + len(buckets['partial'])} affected project(s) are "
+      "on GitHub, so Dependabot can cover them")
+    if buckets["alone"]:
+        w(f"- **{len(buckets['alone'])} are not** — no GitHub repo, so nothing else "
+          "will raise these")
     leads_n = len(data.get("leads") or [])
-    shared = [r for r in rows if len(r["projects"]) > 1]
-    w("Outside Dependabot's reach regardless of settings:")
-    w("")
     if leads_n:
-        w(f"- **{leads_n} host-layer lead(s)** — macOS, Homebrew, container images")
-    if shared:
-        w(f"- **{len(shared)} package(s) shared across projects** — Dependabot files "
-          "per repo, so it cannot tell you one upgrade clears several")
-    w("- **Your working tree** — Dependabot reads the default branch; this reads what "
-      "is installed on disk, so uncommitted or stale checkouts show up here only")
-    w("- **Malicious packages** (`MAL-*` from osv-scanner) — supply-chain compromise, "
-      "not an ordinary CVE")
+        w(f"- {leads_n} host-layer lead(s) (macOS, Homebrew, container images) sit "
+          "outside Dependabot's scope entirely")
     w("")
-    missing = [e for e in buckets["partial"]
-               if not ((nodes.get(e["path"]) or {}).get("dependabot") or {}).get("present")]
-    if missing:
-        w(f"No `dependabot.yml` at all in {len(missing)} affected project(s): "
-          + ", ".join(f"`{e['name']}`" for e in missing[:8])
-          + (" …" if len(missing) > 8 else ""))
+    w("Nothing here is hidden on that basis — a finding is still listed whether or not "
+      "Dependabot would also report it.")
+    w("")
+
+    unreachable = [r for r in rows if not r.get("dependabot_reachable", True)]
+    if unreachable:
+        w("### Dependabot cannot raise these")
         w("")
-    w("The two work best together: let Dependabot open per-repo PRs continuously, and "
-      "use this for the machine-wide picture, the host layer, and the repos it cannot "
-      "see.")
-    w("")
+        w("Out of its reach whatever your repo settings — no GHSA id to alert on, no "
+          "published fix to bump to, or a malicious-package advisory. These are yours "
+          "to handle.")
+        w("")
+        w("| Package | Installed | Why |")
+        w("|---|---|---|")
+        for row in unreachable[:30]:
+            if row.get("malware"):
+                why = "**malicious package** — quarantine, do not upgrade"
+            elif not row["target"]:
+                why = "no published fix — mitigate, pin, or drop the dependency"
+            else:
+                why = "advisory has no GHSA id, so it never reaches Dependabot"
+            w(f"| `{row['package']}` | `{row['installed']}` | {why} |")
+        if len(unreachable) > 30:
+            w(f"| … | | {len(unreachable) - 30} more |")
+        w("")
 
     w("## By project")
     w("")
@@ -287,9 +279,14 @@ def render_markdown(data, rows, projects, home, nodes):
         w(f"`{entry['band']}` · {len(entry['items'])} affected package(s)"
           + (" · " + " · ".join(flags) if flags else ""))
         w("")
-        kind, note = coverage(nodes.get(entry["path"]))
-        mark = {"alone": "🔭", "partial": "◐", "covered": "✓"}.get(kind, "·")
-        w(f"{mark} {note}")
+        node = nodes.get(entry["path"]) or {}
+        if node.get("github"):
+            w(f"↗ On GitHub as `{node['github']}` — Dependabot will flag and raise "
+              "these if it is turned on for that repo.")
+        elif node.get("git_remote"):
+            w("🔭 Remote is not GitHub — Dependabot will not see these.")
+        else:
+            w("🔭 Not a git repo — nothing else is watching this.")
         w("")
         w("| | Package | Installed | Upgrade to | How it is pulled in | Advisories |")
         w("|---|---|---|---|---|---|")
