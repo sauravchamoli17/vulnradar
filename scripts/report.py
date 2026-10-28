@@ -141,8 +141,16 @@ def by_project(rows):
                 "path": project["path"], "name": project["name"],
                 "stale_days": project.get("stale_days"), "items": [],
             })
+            # The row's band is the worst case across every project it touches; prefer the
+            # one computed for this project, so a checkout with nothing installed is not
+            # ranked by someone else's exposure.
             entry["items"].append({**row, "rel": project["rel"],
-                                   "direct": project["direct"], "fix": project["fix"]})
+                                   "band": project.get("band") or row["band"],
+                                   "direct": project["direct"], "fix": project["fix"],
+                                   "pinned_only": (project.get("deps_installed") or {})
+                                   .get("known") is True
+                                   and not (project.get("deps_installed") or {})
+                                   .get("present")})
     out = []
     for entry in projects.values():
         entry["items"].sort(key=lambda i: (ORDER[i["band"]], -i["worst_cvss"], i["package"]))

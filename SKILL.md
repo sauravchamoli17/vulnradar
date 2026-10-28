@@ -78,6 +78,13 @@ Bands answer "do I act?", not just "how bad is the CVE":
   months.
 - **P3 — monitor.** Low exposure; no action unless the context changes.
 
+Bands are computed **per project**, not per advisory. The same package can be installed in one
+checkout and only pinned in a lockfile in twenty others; a project whose dependency tree is not
+on disk is softened a band, or dropped to P3 if it is also dormant, and the finding is marked
+"not installed here". Malicious packages and KEV hits are never softened — a `MAL-*` pin is a
+compromise to deal with whether or not anyone ran the install. The signal is only read for
+ecosystems that install into the project; Go, Maven, Cargo and a default pip stay unknown.
+
 Two result types that must never be conflated when reporting back to the user:
 
 - **Findings** are version-matched. The installed version provably falls inside a published

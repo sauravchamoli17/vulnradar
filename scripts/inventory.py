@@ -159,6 +159,32 @@ LIFECYCLE_HOOKS = {"preinstall", "install", "postinstall", "prepare", "prepublis
                    "preprepare", "postprepare"}
 
 
+NPM_FILES = {"package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock",
+             "bun.lock", "bun.lockb", "npm-shrinkwrap.json"}
+# Only ecosystems that install into the project answer "is the code here?". Go, Maven,
+# Cargo, RubyGems and a default pip resolve into shared caches, so a missing directory
+# proves nothing and they stay unknown rather than being called clean.
+INSTALL_DIRS = [
+    (NPM_FILES, ("node_modules",)),
+    ({"composer.json", "composer.lock"}, ("vendor",)),
+    ({"Gemfile", "Gemfile.lock"}, ("vendor/bundle",)),
+]
+
+
+def install_state(directory, files):
+    """Is the dependency tree materialised on this machine, or only pinned in a lockfile?"""
+    path = Path(directory)
+    known = False
+    for markers, dirs in INSTALL_DIRS:
+        if not markers & set(files):
+            continue
+        known = True
+        for d in dirs:
+            if (path / d).is_dir():
+                return {"known": True, "present": True, "where": d}
+    return {"known": known, "present": False}
+
+
 def build_policy(directory, files):
     """Can a dependency execute code at install time here, and which ones?
 
@@ -853,7 +879,8 @@ def main():
             ecosystem="project", manifests=files, has_lockfile=bool(locks),
             stale_days=days_since(meta.get("git_last_commit")),
             dependabot=dependabot_config(directory),
-            build_policy=build_policy(directory, files), **meta,
+            build_policy=build_policy(directory, files),
+            install_state=install_state(directory, files), **meta,
         )
         graph.edge(host, proj, "contains")
         has_lock = any(f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",

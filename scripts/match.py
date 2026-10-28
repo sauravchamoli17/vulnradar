@@ -67,19 +67,57 @@ def reachability(consumers):
               if (c[0].get("stale_days") is None or c[0]["stale_days"] <= 120)]
     runtime_active = [c for c in runtime
                       if (c[0].get("stale_days") is None or c[0]["stale_days"] <= 120)]
+    def state(c):
+        return c[0].get("install_state") or {}
+    on_disk = [c for c in consumers if state(c).get("present")]
+    unknown = [c for c in consumers if not state(c).get("known")]
     return {
         "runtime": bool(runtime),
         "ci_only": bool(ci) and not runtime,
         "dev_only": bool(consumers) and not runtime and not ci,
         "active": bool(active),
         "runtime_active": bool(runtime_active),
+        "on_disk": bool(on_disk),
+        # Every consumer is an ecosystem we can answer for, and none of them has the tree
+        # installed: the vulnerable version is a lockfile line, not code on this machine.
+        "not_installed": bool(consumers) and not on_disk and not unknown,
     }
 
 
+SOFTEN = {"P0": "P1", "P1": "P2", "P2": "P3", "P3": "P3"}
+
+
+def project_band(band, project, pinned):
+    """The band for one project, not for the advisory as a whole.
+
+    A package can be installed in one checkout and merely pinned in twenty others. Ranking
+    every one of them by the worst case is what buries the projects you actually work in.
+    """
+    if pinned:
+        return band
+    state = project.get("install_state") or {}
+    if not state.get("known") or state.get("present"):
+        return band
+    stale = project.get("stale_days")
+    if stale is not None and stale > 120:
+        return "P3"
+    return SOFTEN[band]
+
+
 def rank(severity, kev, reach, confident):
-    sev = (severity or "unknown").lower()
     if kev:
         return "P0", "listed in CISA KEV — exploited in the wild"
+    band, why = severity_band(severity, reach)
+    if reach["not_installed"]:
+        # Nothing to reach until someone installs. Softened rather than dropped, because
+        # the next `npm install` in that checkout brings the vulnerable version back.
+        band = "P3" if not reach["active"] else SOFTEN[band]
+        why += "; dependencies are not installed here"
+    return band, why
+
+
+def severity_band(severity, reach):
+    sev = (severity or "unknown").lower()
     if sev == "critical" and reach["runtime_active"]:
         return "P0", "critical severity in a runtime dependency of an active project"
     if sev in ("critical", "high") and reach["runtime"]:
@@ -177,6 +215,8 @@ def match_advisories(index, intel, kev_by_cve):
                         "rel": edge["rel"],
                         "direct": bool(edge.get("direct")),
                         "stale_days": project.get("stale_days"),
+                        "deps_installed": (project.get("install_state") or {}),
+                        "band": project_band(band, project, bool(kev)),
                         "fix": fix_command(eco, project, affected["name"], affected.get("fixed")),
                         "dependabot": dependabot_state(coverage, project, affected["name"]),
                         "build": project.get("build_policy"),
@@ -286,7 +326,8 @@ def ingest_osv(path, index, coverage=None):
             consumers = index.consumers(node_id)
             reach = reachability(consumers) if consumers else {
                 "runtime": True, "ci_only": False, "dev_only": False,
-                "active": True, "runtime_active": True}
+                "active": True, "runtime_active": True,
+                "on_disk": True, "not_installed": False}
 
             for vuln in entry.get("vulnerabilities", []) or []:
                 vid = vuln.get("id")
@@ -319,6 +360,9 @@ def ingest_osv(path, index, coverage=None):
                     "projects": ([{"path": project["path"], "name": project["name"],
                                    "rel": edge["rel"], "direct": bool(edge.get("direct")),
                                    "stale_days": project.get("stale_days"),
+                                   "deps_installed": (project.get("install_state")
+                                                      or {}),
+                                   "band": project_band(band, project, malware),
                                    "fix": fix_command(eco, project, name, fixed),
                                    "dependabot": dependabot_state(coverage, project, name),
                                    "build": project.get("build_policy")}

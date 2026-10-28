@@ -791,6 +791,17 @@ struct PackageCard: View {
                                   ? "Disclosed inside the advisory window"
                                   : "Older advisory, found by osv-scanner")
                     }
+                    if item.pinnedOnly {
+                        Text("NOT INSTALLED")
+                            .font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                            .foregroundStyle(Theme.tertiary)
+                            .padding(.horizontal, 4).padding(.vertical, 1.5)
+                            .background(Theme.tertiary.opacity(0.14),
+                                        in: RoundedRectangle(cornerRadius: 3))
+                            .help("The lockfile pins a vulnerable version, but this checkout "
+                                  + "has no dependency tree on disk. It comes back on the "
+                                  + "next install.")
+                    }
                     Spacer()
                     Button {
                         withAnimation(.easeOut(duration: 0.14)) { expanded.toggle() }

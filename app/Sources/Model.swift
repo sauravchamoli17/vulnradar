@@ -52,6 +52,13 @@ struct ProjectRef: Decodable, Hashable {
     let staleDays: Int?
     let fix: String
     let dependabot: DependabotState?
+    let band: String?
+    let depsInstalled: InstallState?
+}
+
+struct InstallState: Decodable, Hashable {
+    let known: Bool?
+    let present: Bool?
 }
 
 struct Finding: Decodable, Hashable {
@@ -148,6 +155,8 @@ struct PackageItem: Identifiable, Hashable {
     let isNew: Bool
     /// Whether this project's repo is on GitHub, where Dependabot would raise it too.
     let dependabotCovered: Bool
+    /// The lockfile pins a vulnerable version, but the tree is not installed in this checkout.
+    let pinnedOnly: Bool
     let advisories: [Finding]
 
     var viaWindow: Bool { advisories.contains { !$0.fromOSV } }
@@ -220,13 +229,18 @@ struct ProjectGroup: Identifiable, Hashable {
                 }
             }
             for ref in refs.values {
+                // The advisory's band is the worst case across every project it touches;
+                // this project's own band accounts for whether the tree is installed here.
                 let item = PackageItem(
-                    band: band, package: primary.package, installed: primary.installed,
+                    band: ref.band.flatMap(Band.init(rawValue:)) ?? band,
+                    package: primary.package, installed: primary.installed,
                     target: target, ecosystem: primary.ecosystem, rel: ref.rel,
                     direct: ref.direct ?? false, fix: ref.fix,
                     kev: group.contains { $0.kev == true },
                     isNew: group.contains { $0.new == true },
                     dependabotCovered: ref.dependabot?.covered == true,
+                    pinnedOnly: ref.depsInstalled?.known == true
+                        && ref.depsInstalled?.present != true,
                     advisories: group.sorted { ($0.cvss ?? 0) > ($1.cvss ?? 0) })
                 byPath[ref.path, default: (ref, [])].items.append(item)
             }
