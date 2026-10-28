@@ -88,6 +88,25 @@ struct Finding: Decodable, Hashable {
     var bandValue: Band { Band(rawValue: band) ?? .p3 }
 }
 
+/// A core advisory for the interpreter itself. These carry no package ecosystem, so the
+/// dependency findings never include them and no package upgrade clears them.
+struct RuntimeFinding: Decodable, Hashable {
+    let band: String
+    let advisory: String
+    let cve: String?
+    let severity: String?
+    let summary: String?
+    let url: String?
+    let package: String
+    let installed: String
+    let fixedVersion: String?
+    let running: Bool?
+    let source: String?
+    let fix: String?
+
+    var bandValue: Band { Band(rawValue: band) ?? .p3 }
+}
+
 struct Lead: Decodable, Hashable {
     let cve: String
     let vendor: String?
@@ -130,6 +149,7 @@ struct Findings: Decodable {
     let graphStats: GraphStats?
     let intel: Intel?
     let scope: ScanScope?
+    let runtimes: [RuntimeFinding]?
 
     static func load(from url: URL) throws -> Findings {
         let decoder = JSONDecoder()

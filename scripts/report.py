@@ -471,6 +471,38 @@ def render_markdown(data, rows, projects, home, nodes):
               f"{ids} | {len(row['projects'])} | {exposure} |")
         w("")
 
+    runtimes = data.get("runtimes") or []
+    if runtimes:
+        running = [r for r in runtimes if r.get("running")]
+        pinned = [r for r in runtimes if not r.get("running")]
+        w(f"## Runtime ({len(runtimes)})")
+        w("")
+        w("Core advisories for the interpreter itself. These carry no package ecosystem, "
+          "so they never appear in the dependency findings above — upgrading a package "
+          "will not clear them.")
+        w("")
+        for group, label in ((running, "Installed and running"),
+                             (pinned, "Pinned by a checkout, not the version running")):
+            if not group:
+                continue
+            version = group[0]["installed"]
+            target = max((r.get("fixed_version") or "" for r in group), default="")
+            w(f"**{label}: `{group[0]['package']} {version}`** "
+              f"— {len(group)} advisor{'y' if len(group) == 1 else 'ies'}"
+              + (f", fixed in `{target}`" if target else ""))
+            w("")
+            w("| CVE | Severity | Fixed in | Summary |")
+            w("|---|---|---|---|")
+            for item in group[:25]:
+                cve = item.get("cve") or item["advisory"]
+                link = f"[{cve}]({item['url']})" if item.get("url") else f"`{cve}`"
+                w(f"| {link} | {item['severity']} | `{item.get('fixed_version') or '—'}` | "
+                  f"{(item.get('summary') or '').splitlines()[0][:90]} |")
+            w("")
+            if group[0].get("fix"):
+                w(f"```\n{group[0]['fix']}\n```")
+                w("")
+
     if leads:
         w(f"## Host-layer leads ({len(leads)})")
         w("")

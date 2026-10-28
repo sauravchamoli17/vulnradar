@@ -113,7 +113,11 @@ rotate every credential reachable from it.
 ## Limits
 
 - Advisory coverage is the GitHub Advisory DB. Vulnerabilities with no advisory for the ecosystem
-  (OS packages beyond KEV name-matching, vendored code, binaries) are out of scope.
+  (OS packages beyond KEV name-matching, vendored code, binaries) are out of scope. The one
+  exception is the Node.js runtime: Node core CVEs have no package ecosystem, so they are pulled
+  from Node's own advisory database and version-matched separately, reported under `runtimes`.
+  Only exact versions are matched — the installed interpreter, and a full `X.Y.Z` in `.nvmrc`.
+  An `engines` range like `>=20` names no single version and is skipped rather than read as 20.0.0.
 - `--days N` is a disclosure window, not a full audit. Something disclosed before the window and
   never patched will not appear — run `--deep` for full advisory history.
 - Reachability is inferred from dependency type and commit recency, not from call graphs. A P2 in

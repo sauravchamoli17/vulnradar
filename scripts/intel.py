@@ -19,6 +19,10 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+# Node core CVEs carry no package ecosystem, so they never appear in the advisory feeds
+# the package matcher uses. Node publishes them with semver ranges of their own.
+NODE_CORE_URL = ("https://raw.githubusercontent.com/nodejs/security-wg"
+                 "/main/vuln/core/index.json")
 GH_API = "https://api.github.com"
 UA = "vuln-radar (local security triage)"
 
@@ -136,6 +140,33 @@ def fetch_coverage(graph_path):
     return dict(zip(slugs, results))
 
 
+def fetch_node_core(platform):
+    """Node.js runtime advisories, with the ones for other operating systems dropped."""
+    data = http_json(NODE_CORE_URL, timeout=45)
+    rows = []
+    for key, entry in (data or {}).items():
+        if not isinstance(entry, dict):
+            continue
+        envs = [e.lower() for e in (entry.get("affectedEnvironments") or ["all"])]
+        if "all" not in envs and platform not in envs:
+            continue
+        cves = [c for c in (entry.get("cve") or []) if c]
+        rows.append({
+            "runtime": "node",
+            "id": cves[0] if cves else f"nodejs-core-{key}",
+            "cve": cves[0] if cves else None,
+            "aliases": cves,
+            "severity": (entry.get("severity") or "unknown").lower(),
+            "vulnerable": entry.get("vulnerable"),
+            "patched": entry.get("patched"),
+            "summary": (entry.get("description") or entry.get("overview") or "").strip()[:300],
+            "url": entry.get("ref") or
+                   (f"https://nvd.nist.gov/vuln/detail/{cves[0]}" if cves else None),
+            "environments": envs,
+        })
+    return rows
+
+
 def normalize(adv):
     affected = []
     for entry in adv.get("vulnerabilities") or []:
@@ -242,6 +273,12 @@ def main():
     except (urllib.error.URLError, OSError, ValueError) as exc:
         errors.append(f"kev: {exc}")
 
+    runtime_advisories = []
+    try:
+        runtime_advisories = fetch_node_core(sys.platform)
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        errors.append(f"node core: {exc}")
+
     payload = {
         "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "window_days": args.days,
@@ -251,6 +288,8 @@ def main():
         "advisories": advisories,
         "kev": kev,
         "kev_catalog": kev_version,
+        "runtime_advisories": runtime_advisories,
+        "platform": sys.platform,
         "coverage": coverage,
         "errors": errors,
     }
@@ -267,6 +306,7 @@ def main():
         print(f"advisories: {len(advisories)} published since {since} ({sev or 'none'})")
         print(f"ecosystems queried: {', '.join(ecosystems)}  [auth: {payload['auth']}]")
         print(f"kev catalog: {len(kev)} known-exploited CVEs (version {kev_version})")
+        print(f"node core: {len(runtime_advisories)} runtime advisories for {sys.platform}")
         if coverage:
             readable = [v for v in coverage.values() if v["readable"]]
             alerting = sum(1 for v in readable if v["alerts"])

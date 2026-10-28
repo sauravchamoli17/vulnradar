@@ -429,6 +429,9 @@ struct Overview: View {
                     malwareBanner
                     header
                     tiles
+                    // The interpreter sits above the per-project list: it is the one
+                    // finding that affects everything running on this machine.
+                    runtimePanel
                     if !topRisks.isEmpty { risks }
                     if let leads = store.findings?.leads, !leads.isEmpty { leadsPanel(leads) }
                     scanPanel
@@ -606,6 +609,56 @@ struct Overview: View {
                     }
                 }
             }
+        }
+    }
+
+    /// The interpreter itself. No package upgrade clears these, so they get their own
+    /// block rather than sitting among the dependency findings.
+    @ViewBuilder private var runtimePanel: some View {
+        let running = (store.findings?.runtimes ?? []).filter { $0.running == true }
+        if let first = running.first {
+            let worst = running.min { $0.bandValue < $1.bandValue }
+            SectionLabel(text: "Runtime")
+            Panel {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack(spacing: Space.s) {
+                        Text("\(first.package) \(first.installed)")
+                            .font(TypeScale.strong).foregroundStyle(Theme.text)
+                        if let target = newestFix(running) {
+                            Text("\u{2192} \(target)").font(TypeScale.mono)
+                                .foregroundStyle(Theme.good)
+                        }
+                        Spacer()
+                        Text("\(running.count) advisories")
+                            .font(TypeScale.caption)
+                            .foregroundStyle((worst?.bandValue ?? .p3).tint)
+                    }
+                    ForEach(running.prefix(4), id: \.advisory) { item in
+                        HStack(spacing: Space.s) {
+                            Text(item.cve ?? item.advisory)
+                                .font(TypeScale.mono).foregroundStyle(Theme.secondary)
+                            Text(item.severity ?? "")
+                                .font(TypeScale.caption)
+                                .foregroundStyle(item.bandValue.tint)
+                            Text(item.summary ?? "").font(TypeScale.caption)
+                                .foregroundStyle(Theme.tertiary).lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
+                    }
+                    Text("Core advisories for the interpreter \u{2014} no package upgrade "
+                         + "clears these.")
+                        .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                        .padding(.top, 2)
+                }
+            }
+        }
+    }
+
+    /// Several advisories in one release line fix at different points; the newest wins.
+    private func newestFix(_ items: [RuntimeFinding]) -> String? {
+        items.compactMap(\.fixedVersion).max { a, b in
+            a.split(separator: ".").compactMap { Int($0) }
+                .lexicographicallyPrecedes(b.split(separator: ".").compactMap { Int($0) })
         }
     }
 

@@ -182,6 +182,73 @@ ORDER_CASES = [
 ]
 
 
+NODE_LINE = re.compile(r"^\^?(\d+)\.x$")
+
+
+def node_patched_lines(patched):
+    """`^22.23.2 || ^24.18.1` -> {22: parsed 22.23.2, 24: parsed 24.18.1}.
+
+    Node states each fix as one caret range per release line, so the caret's major names
+    the line and its version is where that line stopped being affected.
+    """
+    lines = {}
+    for part in str(patched or "").split("||"):
+        parsed = parse_version(part.strip().lstrip("^~>=< "))
+        if parsed and parsed[0]:
+            lines[parsed[0][0]] = parsed
+    return lines
+
+
+def node_affected(version, vulnerable, patched):
+    """Is this Node runtime inside a core advisory's affected range?
+
+    The Node security database is almost entirely `22.x || 24.x` for the affected lines
+    plus one caret range per line for the fix, so the fix decides: a line with a stated
+    fix is affected below it, and a line named vulnerable with no fix has none yet. The
+    handful of entries written as plain comparators fall through to in_range.
+    """
+    target = parse_version(version)
+    if target is None or not target[0]:
+        return False
+    major = target[0][0]
+    fixes = node_patched_lines(patched)
+    if major in fixes:
+        return cmp_version(target, fixes[major]) < 0
+    for part in str(vulnerable or "").split("||"):
+        part = part.strip()
+        if not part:
+            continue
+        line = NODE_LINE.match(part)
+        if line:
+            if int(line.group(1)) == major:
+                return True
+            continue
+        # `>=10.0.0 <10.19.0` is one range written with spaces, not two clauses.
+        if in_range(version, re.sub(r"\s+(?=[<>=^~\d])", ", ", part)):
+            return True
+    return False
+
+
+NODE_CASES = [
+    # (installed, vulnerable, patched, expected)
+    ("22.22.2", "22.x || 24.x || 26.x", "^22.23.2 || ^24.18.1 || ^26.5.1", True),
+    ("22.23.2", "22.x || 24.x || 26.x", "^22.23.2 || ^24.18.1 || ^26.5.1", False),
+    ("22.24.0", "22.x || 24.x || 26.x", "^22.23.2 || ^24.18.1 || ^26.5.1", False),
+    ("24.18.0", "22.x || 24.x || 26.x", "^22.23.2 || ^24.18.1 || ^26.5.1", True),
+    ("24.18.1", "22.x || 24.x || 26.x", "^22.23.2 || ^24.18.1 || ^26.5.1", False),
+    # A release line the advisory never names is not affected.
+    ("20.19.5", "22.x || 24.x", "^22.23.2 || ^24.18.1", False),
+    # Named vulnerable with no fix for that line yet.
+    ("18.4.0", "18.x || 22.x", "^22.23.2", True),
+    # The rare comparator form.
+    ("10.5.0", ">=10.0.0 <10.19.0", "^10.19.0", True),
+    ("10.19.0", ">=10.0.0 <10.19.0", "^10.19.0", False),
+    ("v22.22.2", "22.x", "^22.23.2", True),
+    ("", "22.x", "^22.23.2", False),
+    ("not-a-version", "22.x", "^22.23.2", False),
+]
+
+
 def selftest():
     failures = []
     for version, spec, expected in RANGE_CASES:
@@ -194,12 +261,17 @@ def selftest():
             failures.append(f"  expected {lower} < {higher}")
     if highest(["1.2.3", "1.10.0", "main", "1.9.9"]) != "1.10.0":
         failures.append("  highest() picked the wrong version")
+    for version, vulnerable, patched, expected in NODE_CASES:
+        actual = node_affected(version, vulnerable, patched)
+        if actual != expected:
+            failures.append(f"  node_affected({version!r}, {vulnerable!r}, {patched!r}) "
+                            f"= {actual}, want {expected}")
     if failures:
         print(f"vercmp selftest FAILED ({len(failures)})")
         print("\n".join(failures))
         return 1
     print(f"vercmp selftest ok: {len(RANGE_CASES)} range cases, "
-          f"{len(ORDER_CASES)} ordering cases")
+          f"{len(ORDER_CASES)} ordering cases, {len(NODE_CASES)} node-runtime cases")
     return 0
 
 

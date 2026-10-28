@@ -15,7 +15,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from vercmp import cmp_version, highest, in_range, lowest, parse_version, selftest  # noqa: E402
+from vercmp import (cmp_version, highest, in_range, lowest,  # noqa: E402
+                    node_affected, parse_version, selftest)
 
 STOPWORDS ={"and", "the", "for", "server", "service", "software", "products", "product",
              "system", "systems", "manager", "suite", "platform", "plugin", "core", "web",
@@ -241,6 +242,103 @@ def match_advisories(index, intel, kev_by_cve):
     return findings
 
 
+RUNTIME_BAND = {"critical": "P0", "high": "P1", "medium": "P2",
+                "low": "P3", "unknown": "P3"}
+
+
+def node_fix_target(patched, version):
+    """The version this release line was fixed in, as written: `^22.23.2` -> `22.23.2`."""
+    target = parse_version(version)
+    if not target or not target[0]:
+        return None
+    for part in str(patched or "").split("||"):
+        cleaned = part.strip().lstrip("^~>=< ")
+        parsed = parse_version(cleaned)
+        if parsed and parsed[0] and parsed[0][0] == target[0][0]:
+            return cleaned
+    return None
+
+
+EXACT_PIN = {".nvmrc", ".node-version", ".python-version", ".ruby-version"}
+
+
+def runtime_is_exact(node):
+    """Only match a runtime version that something will actually run.
+
+    `engines` holds ranges — `>=20` reduces to the string "20" — and a bare major in
+    .nvmrc means "newest of that line". Reading either as a literal version invents an
+    ancient release nobody has, and then matches every advisory fixed since.
+    """
+    source = node.get("source")
+    if source == "installed":
+        return True
+    if source not in EXACT_PIN:
+        return False
+    parsed = parse_version(node.get("version"))
+    return bool(parsed and len(parsed[0]) >= 3)
+
+
+def match_runtimes(index, intel, kev_by_cve):
+    """Version-match the runtimes themselves.
+
+    Node core CVEs carry no package ecosystem, so the advisory matcher never sees them:
+    without this the interpreter is inventoried and then never actually checked.
+    """
+    advisories = intel.get("runtime_advisories") or []
+    if not advisories:
+        return []
+    findings = []
+    for node in index.nodes.values():
+        if node.get("kind") != "runtime" or not node.get("version"):
+            continue
+        if not runtime_is_exact(node):
+            continue
+        name = (node.get("name") or "").lower()
+        # "installed" is what actually runs; a pinned version is what a checkout asks for.
+        installed = node.get("source") == "installed"
+        projects = [{"path": p["path"], "name": p["name"],
+                     "stale_days": p.get("stale_days")}
+                    for p, _ in index.consumers(node["id"])]
+        for adv in advisories:
+            if adv.get("runtime") != name:
+                continue
+            if not node_affected(node["version"], adv.get("vulnerable"), adv.get("patched")):
+                continue
+            kev = kev_by_cve.get(adv.get("cve") or "")
+            severity = (adv.get("severity") or "unknown").lower()
+            band = "P0" if kev else RUNTIME_BAND.get(severity, "P3")
+            if kev:
+                why = "listed in CISA KEV — exploited in the wild"
+            elif installed:
+                why = f"{severity} severity in the {name} you have installed"
+            else:
+                band = SOFTEN[band]
+                why = f"{severity} severity in a pinned {name} version, not the one running"
+            fixed = node_fix_target(adv.get("patched"), node["version"])
+            findings.append({
+                "type": "runtime",
+                "key": f"{adv['id']}|{name}@{node['version']}|{node.get('source')}",
+                "band": band, "why": why,
+                "advisory": adv["id"], "cve": adv.get("cve"),
+                "aliases": adv.get("aliases") or [],
+                "severity": severity, "kev": bool(kev),
+                "summary": adv.get("summary"), "url": adv.get("url"),
+                "ecosystem": "runtime", "package": name,
+                "installed": node["version"], "fixed_version": fixed,
+                "vulnerable_range": adv.get("vulnerable"),
+                "source": node.get("source"), "running": installed,
+                "environments": adv.get("environments") or ["all"],
+                "projects": projects,
+                "fix": (f"nvm install {fixed} && nvm alias default {fixed}"
+                        if fixed and installed else
+                        f"pin {name} >= {fixed}" if fixed else None),
+                "confident": True,
+            })
+    order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+    findings.sort(key=lambda f: (order[f["band"]], not f["running"], f["advisory"]))
+    return findings
+
+
 def match_kev_leads(index, kev_rows, days):
     """KEV carries no version ranges, so host-layer hits are leads for a human to confirm."""
     cutoff = time.strftime("%Y-%m-%d", time.gmtime(time.time() - days * 86400))
@@ -463,15 +561,17 @@ def main():
         findings += ingest_osv(args.osv_results, index, intel.get("coverage") or {})
     findings = dedupe(findings)
     leads = match_kev_leads(index, kev_rows, args.kev_days)
+    runtimes = match_runtimes(index, intel, kev_by_cve)
 
     previous = set()
     if args.state and Path(args.state).is_file():
         try:
             old = json.loads(Path(args.state).read_text(encoding="utf-8"))
-            previous = {f["key"] for f in old.get("findings", []) + old.get("leads", [])}
+            previous = {f["key"] for f in old.get("findings", [])
+                        + old.get("leads", []) + old.get("runtimes", [])}
         except (OSError, ValueError):
             previous = set()
-    for item in findings + leads:
+    for item in findings + leads + runtimes:
         item["new"] = bool(previous) and item["key"] not in previous
 
     order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -507,6 +607,7 @@ def main():
         "had_previous_state": bool(previous),
         "findings": findings,
         "leads": leads,
+        "runtimes": runtimes,
         "alerts": alerts,
         "malware": malware,
         "install_scripts": install_script_summary(index),
