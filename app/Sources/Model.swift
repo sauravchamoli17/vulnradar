@@ -144,6 +144,8 @@ struct PackageItem: Identifiable, Hashable {
     let fix: String
     let kev: Bool
     let isNew: Bool
+    /// Whether this project's repo is on GitHub, where Dependabot would raise it too.
+    let dependabotCovered: Bool
     let advisories: [Finding]
 
     var viaWindow: Bool { advisories.contains { !$0.fromOSV } }
@@ -222,6 +224,7 @@ struct ProjectGroup: Identifiable, Hashable {
                     direct: ref.direct ?? false, fix: ref.fix,
                     kev: group.contains { $0.kev == true },
                     isNew: group.contains { $0.new == true },
+                    dependabotCovered: ref.dependabot?.covered == true,
                     advisories: group.sorted { ($0.cvss ?? 0) > ($1.cvss ?? 0) })
                 byPath[ref.path, default: (ref, [])].items.append(item)
             }

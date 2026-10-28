@@ -289,23 +289,10 @@ def render_markdown(data, rows, projects, home, nodes):
         buckets[coverage(nodes.get(entry["path"]))[0]].append(entry)
     w("## Dependabot")
     w("")
-    w("These advisories come from the GitHub Advisory Database, the same source "
-      "Dependabot uses. **For any project whose repo is on GitHub, Dependabot will "
-      "flag and raise these itself if you have it switched on for that repo** — so "
-      "check there before fixing by hand.")
-    w("")
-    w(f"- {len(buckets['covered']) + len(buckets['partial'])} affected project(s) are "
-      "on GitHub, so Dependabot can cover them")
-    if buckets["alone"]:
-        w(f"- **{len(buckets['alone'])} are not** — no GitHub repo, so nothing else "
-          "will raise these")
-    leads_n = len(data.get("leads") or [])
-    if leads_n:
-        w(f"- {leads_n} host-layer lead(s) (macOS, Homebrew, container images) sit "
-          "outside Dependabot's scope entirely")
-    w("")
-    w("Nothing here is hidden on that basis — a finding is still listed whether or not "
-      "Dependabot would also report it.")
+    w("These come from the GitHub Advisory Database, the same source Dependabot uses. "
+      "A ✓ in the Dependabot column means that project's repo is on GitHub, so "
+      "Dependabot will flag and raise it too if you have it turned on there. Nothing "
+      "is hidden on that basis.")
     w("")
 
     unreachable = [r for r in rows if not r.get("dependabot_reachable", True)]
@@ -348,18 +335,11 @@ def render_markdown(data, rows, projects, home, nodes):
         w(f"`{entry['band']}` · {len(entry['items'])} affected package(s)"
           + (" · " + " · ".join(flags) if flags else ""))
         w("")
-        node = nodes.get(entry["path"]) or {}
-        if node.get("github"):
-            w(f"↗ On GitHub as `{node['github']}` — Dependabot will flag and raise "
-              "these if it is turned on for that repo.")
-        elif node.get("git_remote"):
-            w("🔭 Remote is not GitHub — Dependabot will not see these.")
-        else:
-            w("🔭 Not a git repo — nothing else is watching this.")
-        w("")
+
+        covered = bool((nodes.get(entry["path"]) or {}).get("github"))
         w("| | Package | Installed | Upgrade to | How it is pulled in | Age | "
-          "Advisories |")
-        w("|---|---|---|---|---|---|---|")
+          "Dependabot | Advisories |")
+        w("|---|---|---|---|---|---|---|---|")
         for item in entry["items"]:
             mark = {"P0": "🔴", "P1": "🟠", "P2": "🟡", "P3": "⚪"}[item["band"]]
             how = ("direct" if item["direct"] else "transitive")
@@ -376,7 +356,8 @@ def render_markdown(data, rows, projects, home, nodes):
                       else "backlog" if item["via_osv"] and not item["via_window"]
                       else "both")
             w(f"| {mark} | `{item['package']}` | `{item['installed']}` | "
-              f"`{item['target'] or '—'}` | {how} | {origin} | {ids} |")
+              f"`{item['target'] or '—'}` | {how} | {origin} | "
+              f"{'✓' if covered else '—'} | {ids} |")
         w("")
         w("```bash")
         for line in project_fix_block(entry, home):
@@ -709,6 +690,9 @@ __D3__
   .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
   .chip { font-size: 11px; padding: 2px 7px; border-radius: 999px; border: 1px solid var(--line);
     color: var(--muted); }
+  .chip.dep { color: var(--proj);
+    border-color: color-mix(in srgb, var(--proj) 45%, transparent);
+    background: color-mix(in srgb, var(--proj) 13%, transparent); }
   .chip.kev { color: var(--p0); border-color: color-mix(in srgb, var(--p0) 45%, transparent);
     background: color-mix(in srgb, var(--p0) 13%, transparent); font-weight: 600; }
   .adv { border-top: 1px solid var(--line); padding: 11px 0; }
@@ -939,6 +923,10 @@ function showDetail(d) {
     (d.rel === 'dev' ? ', dev' : d.rel === 'ci_uses' ? ', CI' : '') + '</span>');
   if (d.ecosystem) chips.push('<span class="chip">' + esc(d.ecosystem) + '</span>');
   if (d.shared > 1) chips.push('<span class="chip">in ' + d.shared + ' projects</span>');
+  if (d.kind !== 'project' && cluster && cluster.github) {
+    chips.push('<span class="chip dep" title="On GitHub as ' + esc(cluster.github) +
+      ' — Dependabot will raise this too if enabled">dependabot</span>');
+  }
 
   const body = advisories.length ? advisories.map(a => {
     const bits = [];
@@ -960,12 +948,6 @@ function showDetail(d) {
   }).join('') : '<div class="hint">No advisory matched this package — it is shown for ' +
     'context as part of this dependency set.</div>';
 
-  const gh = cluster && cluster.github;
-  const watch = d.kind === 'project' ? '' : (gh
-    ? '<div class="hint">&#8599; Dependabot will flag and raise this itself if it is ' +
-      'turned on for ' + esc(gh) + '.</div>'
-    : '<div class="hint">Not a GitHub repo &mdash; nothing else will raise this.</div>');
-
   const fix = d.fix
     ? '<div class="fix"><div class="chip" style="border:0;padding-left:0">Fix</div>' +
       '<code>cd ' + esc(cluster ? cluster.path : '') + '\n' + esc(d.fix) + '</code>' +
@@ -978,7 +960,7 @@ function showDetail(d) {
     '<div class="jump">' + esc(d.version || '') +
     (d.target ? ' &rarr; <span class="to">' + esc(d.target) + '</span>'
               : ' <span style="color:var(--muted)">&rarr; no fix published</span>') + '</div>' +
-    '<div class="chips">' + chips.join('') + '</div>' + watch + body + fix;
+    '<div class="chips">' + chips.join('') + '</div>' + body + fix;
   drawer.classList.add('open');
   relayout();
 

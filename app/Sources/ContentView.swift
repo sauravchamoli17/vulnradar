@@ -355,7 +355,6 @@ struct Overview: View {
                     header
                     tiles
                     if !topRisks.isEmpty { risks }
-                    dependabotPanel
                     if let leads = store.findings?.leads, !leads.isEmpty { leadsPanel(leads) }
                     scanPanel
                 }
@@ -503,12 +502,6 @@ struct Overview: View {
                                                     in: RoundedRectangle(cornerRadius: 4))
                                 }
                                 Spacer()
-                                if project.dependabot?.covered == true {
-                                    Image(systemName: "arrow.up.forward.square")
-                                        .font(.system(size: 9))
-                                        .foregroundStyle(Theme.tertiary)
-                                        .help("On GitHub — Dependabot can raise these")
-                                }
                                 Text(project.items.prefix(3).map(\.package)
                                     .joined(separator: ", "))
                                     .font(TypeScale.mono).foregroundStyle(Theme.tertiary)
@@ -527,50 +520,6 @@ struct Overview: View {
                             Divider().overlay(Color.white.opacity(0.055))
                                 .padding(.leading, 15)
                         }
-                    }
-                }
-            }
-        }
-    }
-
-    /// Says plainly which of these something else will raise, and which are yours alone.
-    @ViewBuilder
-    private var dependabotPanel: some View {
-        let onGitHub = projects.filter { $0.dependabot?.covered == true }
-        let alone = projects.filter { $0.dependabot?.covered != true }
-        if !projects.isEmpty {
-            VStack(alignment: .leading, spacing: Space.s + 2) {
-                SectionLabel(text: "Dependabot")
-                Panel {
-                    VStack(alignment: .leading, spacing: 7) {
-                        if !onGitHub.isEmpty {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "arrow.up.forward.square")
-                                    .font(.system(size: 11)).foregroundStyle(Theme.accent)
-                                (Text("\(onGitHub.count) of \(projects.count)").bold()
-                                 + Text(" affected project(s) are on GitHub — Dependabot "
-                                        + "will flag and raise these itself if it is "
-                                        + "turned on for those repos."))
-                                    .font(TypeScale.body).foregroundStyle(Theme.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        if !alone.isEmpty {
-                            HStack(alignment: .top, spacing: 8) {
-                                Image(systemName: "binoculars")
-                                    .font(.system(size: 11)).foregroundStyle(Band.p1.tint)
-                                (Text("\(alone.count)").bold()
-                                 + Text(" are not on GitHub — nothing else will raise "
-                                        + "these."))
-                                    .font(TypeScale.body).foregroundStyle(Theme.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        Text("Nothing is hidden on that basis — every finding is listed "
-                             + "either way. The host layer and your working tree are "
-                             + "outside Dependabot's reach entirely.")
-                            .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
@@ -699,17 +648,6 @@ struct ProjectDetail: View {
                         .foregroundStyle(Theme.accent)
                 }
             }
-            if let note = project.dependabot?.note {
-                HStack(spacing: 6) {
-                    Image(systemName: project.dependabot?.covered == true
-                          ? "arrow.up.forward.square" : "binoculars")
-                        .font(.system(size: 10))
-                    Text(note).font(TypeScale.caption)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .foregroundStyle(Theme.tertiary)
-                .padding(.top, 2)
-            }
         }
     }
 
@@ -783,6 +721,15 @@ struct PackageCard: View {
                     if item.isNew {
                         Text("NEW").font(.system(size: 9, weight: .bold)).tracking(0.4)
                             .foregroundStyle(Theme.accent)
+                    }
+                    if item.dependabotCovered {
+                        Text("DEPENDABOT")
+                            .font(.system(size: 8.5, weight: .bold)).tracking(0.5)
+                            .foregroundStyle(Theme.accent)
+                            .padding(.horizontal, 4).padding(.vertical, 1.5)
+                            .background(Theme.accent.opacity(0.14),
+                                        in: RoundedRectangle(cornerRadius: 3))
+                            .help("On GitHub — Dependabot will raise this too if enabled")
                     }
                     if let origin = item.originLabel {
                         Text(origin)
