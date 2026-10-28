@@ -25,23 +25,37 @@ jobs:
         # ditto preserves the bundle's signature and resource forks; plain zip does not.
         run: ditto -c -k --keepParent VulnRadar.app VulnRadar.app.zip
 
-      - name: Checksum
+      - name: Build the disk image
         working-directory: dist
-        run: shasum -a 256 VulnRadar.app.zip | tee VulnRadar.app.zip.sha256
+        run: |
+          mkdir -p stage
+          cp -R VulnRadar.app stage/
+          ln -s /Applications stage/Applications
+          hdiutil create -volname VulnRadar -srcfolder stage -ov -format UDZO VulnRadar.dmg
+          rm -rf stage
+
+      - name: Checksums
+        working-directory: dist
+        run: shasum -a 256 VulnRadar.dmg VulnRadar.app.zip | tee checksums.txt
 
       - uses: actions/upload-artifact@v4
         with:
           name: VulnRadar
-          path: dist/VulnRadar.app.zip
+          path: |
+            dist/VulnRadar.dmg
+            dist/VulnRadar.app.zip
 
       - name: Publish release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: |
+            dist/VulnRadar.dmg
             dist/VulnRadar.app.zip
-            dist/VulnRadar.app.zip.sha256
+            dist/checksums.txt
           body: |
+            Download `VulnRadar.dmg`, open it and drag the app to Applications.
+
             The app is ad-hoc signed, not notarised. macOS blocks the first launch.
 
             Right-click the app and choose **Open**, or run:

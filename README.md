@@ -8,7 +8,7 @@ end — the advisory feed — builds a dependency graph of every project you hav
 which of your projects a newly published advisory lands in. A full sweep of ~220 projects and
 ~15,000 packages takes about 20 seconds.
 
-![screenshot](docs/screenshot.png)
+![The project list, ranked by whether you have to act](docs/screenshot.png)
 
 ## What makes it different
 
@@ -33,8 +33,8 @@ brew install --cask sauravchamoli17/tap/vulnradar
 
 ### Download
 
-Grab `VulnRadar.app.zip` from [Releases](../../releases), unzip, and drag it to
-`/Applications`.
+Grab `VulnRadar.dmg` from [Releases](../../releases), open it and drag the app to
+`Applications`. A plain `.zip` of the bundle is attached to the same release if you prefer it.
 
 The app is **ad-hoc signed, not notarised** (notarisation needs a paid Apple Developer account).
 macOS will refuse the first launch. To get past it, either right-click the app → **Open** →
@@ -87,6 +87,10 @@ Output lands in `~/.claude/vuln-radar/latest/`:
 Drop this directory into `~/.claude/skills/` and Claude Code picks it up as `/vuln-radar`.
 `SKILL.md` tells the agent how to run a scan and, importantly, how to report the results without
 crying wolf.
+
+Every project on the machine is a cluster; size and colour follow the worst finding in it.
+
+![One cluster per project, coloured by worst finding](docs/graph.png)
 
 ## How it works
 
