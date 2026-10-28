@@ -97,11 +97,15 @@ struct SettingsView: View {
     @AppStorage("outputDir") private var outputDir = ""
     @AppStorage("roots") private var roots = ""
     @AppStorage("scanScope") private var scanScope = "home"
+    @AppStorage("ignored") private var ignored = ""
     @AppStorage("windowDays") private var windowDays = 14
     @AppStorage("deepScan") private var deepScan = false
 
-    private var folders: [String] {
-        roots.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+    private var folders: [String] { lines(roots) }
+    private var ignoredFolders: [String] { lines(ignored) }
+
+    private func lines(_ value: String) -> [String] {
+        value.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
@@ -184,7 +188,67 @@ struct SettingsView: View {
                 .padding(.trailing, 14)
                 .padding(.bottom, 13)
             }
+            RowDivider()
+            ignoreRow
         }
+    }
+
+    private var ignoreRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Skip these").font(TypeScale.ui(13, .medium)).foregroundStyle(Theme.text)
+                Text("Old clients, archives, anything you no longer work on. Applies "
+                     + "whichever scope you picked above.")
+                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ForEach(ignoredFolders, id: \.self) { ignoreChip($0) }
+            Button { chooseIgnored() } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "plus").font(.system(size: 10, weight: .bold))
+                    Text("Add folder to skip…").font(TypeScale.caption)
+                }
+                .foregroundStyle(Theme.accent)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
+    private func ignoreChip(_ folder: String) -> some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: "nosign")
+                .font(.system(size: 10)).foregroundStyle(Theme.tertiary)
+            Text(displayPath(folder)).font(TypeScale.mono).foregroundStyle(Theme.secondary)
+                .lineLimit(1).truncationMode(.head)
+            Spacer()
+            Button { ignored = ignoredFolders.filter { $0 != folder }
+                                             .joined(separator: "\n") } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.tertiary)
+            }
+            .buttonStyle(.plain)
+            .pointerCursor()
+        }
+        .padding(.horizontal, Space.m)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
+    }
+
+    private func chooseIgnored() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = true
+        panel.prompt = "Skip this folder"
+        panel.message = "Choose a folder the scan should leave alone"
+        guard panel.runModal() == .OK else { return }
+        var list = ignoredFolders
+        for url in panel.urls where !list.contains(url.path) { list.append(url.path) }
+        ignored = list.joined(separator: "\n")
     }
 
     private func folderChip(_ folder: String) -> some View {

@@ -9,6 +9,7 @@ HOME_DIR="${HOME}"
 STATE_DIR="${HOME_DIR}/.claude/vuln-radar"
 OUT="${STATE_DIR}/latest"
 ROOTS=""
+IGNORE=""
 DAYS=14
 DEPTH=8
 KEV_DAYS=90
@@ -22,6 +23,8 @@ usage() {
 Usage: radar.sh [options]
 
   --roots "<dir> [dir...]"  directories to inventory      (default: $HOME)
+  --ignore "<pat> [pat...]" skip these: a folder path, a bare directory name to prune
+                            anywhere, or a glob matched against the full path
   --days N                  advisory publication window   (default: 14)
   --depth N                 directory walk depth          (default: 8)
   --kev-days N              KEV window for host leads     (default: 90)
@@ -31,13 +34,14 @@ Usage: radar.sh [options]
   --no-host                 skip the host layer (brew, runtimes, images)
   --out DIR                 output directory               (default: ~/.claude/vuln-radar/latest)
   --title "..."             title for the rendered graph
-  --selftest                run the version-matching tests and exit
+  --selftest                run the version-matching and ignore tests, then exit
 USAGE
 }
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --roots) ROOTS="$2"; shift 2 ;;
+    --roots) ROOTS="${ROOTS:+$ROOTS }$2"; shift 2 ;;
+    --ignore) IGNORE="${IGNORE:+$IGNORE }$2"; shift 2 ;;
     --days) DAYS="$2"; shift 2 ;;
     --depth) DEPTH="$2"; shift 2 ;;
     --kev-days) KEV_DAYS="$2"; shift 2 ;;
@@ -47,7 +51,9 @@ while [ $# -gt 0 ]; do
     --no-host) NO_HOST=1; shift ;;
     --out) OUT="$2"; shift 2 ;;
     --title) TITLE="$2"; shift 2 ;;
-    --selftest) exec python3 "${SCRIPT_DIR}/vercmp.py" ;;
+    --selftest)
+      python3 "${SCRIPT_DIR}/vercmp.py" || exit 1
+      exec python3 "${SCRIPT_DIR}/inventory.py" --selftest ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage; exit 1 ;;
   esac
@@ -67,11 +73,14 @@ PREV="${OUT}/previous-findings.json"
 
 step() { printf '\n== %s\n' "$1"; }
 
-step "1/4 inventory  (roots: ${ROOTS}, depth ${DEPTH})"
+step "1/4 inventory  (roots: ${ROOTS}, depth ${DEPTH}${IGNORE:+, ignoring: ${IGNORE}})"
 HOST_FLAG=""
 [ "$NO_HOST" -eq 1 ] && HOST_FLAG="--no-host"
 # shellcheck disable=SC2086
-"$PY" "${SCRIPT_DIR}/inventory.py" --roots $ROOTS --depth "$DEPTH" $HOST_FLAG \
+IGNORE_FLAG=""
+[ -n "$IGNORE" ] && IGNORE_FLAG="--ignore $IGNORE"
+# shellcheck disable=SC2086
+"$PY" "${SCRIPT_DIR}/inventory.py" --roots $ROOTS --depth "$DEPTH" $HOST_FLAG $IGNORE_FLAG \
   --out "${OUT}/graph.json" || { echo "inventory failed" >&2; exit 1; }
 
 step "2/4 intel      (advisories published in the last ${DAYS} days + CISA KEV)"

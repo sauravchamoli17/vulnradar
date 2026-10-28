@@ -7,6 +7,7 @@ struct Settings {
     @AppStorage("outputDir") static var outputDir = ""
     @AppStorage("roots") static var roots = ""
     @AppStorage("scanScope") static var scanScope = "home"
+    @AppStorage("ignored") static var ignored = ""
     @AppStorage("windowDays") static var windowDays = 14
     @AppStorage("deepScan") static var deepScan = false
 
@@ -19,7 +20,16 @@ struct Settings {
         outputDir.isEmpty ? NSHomeDirectory() + "/.claude/vuln-radar/latest" : outputDir
     }
     static var folders: [String] {
-        roots.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        lines(roots)
+    }
+    /// Applies whichever scope is in force: you can sweep home and still skip the
+    /// folder full of clients you stopped working for.
+    static var ignoredFolders: [String] {
+        lines(ignored)
+    }
+
+    private static func lines(_ value: String) -> [String] {
+        value.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
@@ -107,6 +117,9 @@ final class Store: ObservableObject {
         for root in Settings.resolvedRoots.split(separator: "\n") {
             let trimmed = root.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty { args.append(contentsOf: ["--roots", trimmed]) }
+        }
+        for pattern in Settings.ignoredFolders {
+            args.append(contentsOf: ["--ignore", pattern])
         }
         if Settings.deepScan { args.append("--deep") }
 

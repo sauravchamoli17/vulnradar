@@ -5,6 +5,7 @@ Read-only. Never installs, never runs a package script.
 """
 
 import argparse
+import fnmatch
 import json
 import os
 import re
@@ -669,12 +670,43 @@ PARSERS = {
 }
 
 
-def discover(roots, max_depth, skip_hidden=True):
+def ignore_matcher(patterns):
+    """Turn the user's ignore list into a predicate over directory paths.
+
+    Three shapes, because people reach for all three: a bare name prunes a directory of
+    that name wherever it turns up, anything containing a glob character is matched against
+    the whole path, and a path prunes that subtree.
+    """
+    names, globs, trees = set(), [], []
+    for raw in patterns or []:
+        pattern = str(raw).strip()
+        if not pattern:
+            continue
+        expanded = os.path.expanduser(pattern)
+        if any(ch in pattern for ch in "*?["):
+            globs.append(expanded)
+        elif "/" in pattern:
+            trees.append(Path(expanded).resolve())
+        else:
+            names.add(pattern)
+    if not (names or globs or trees):
+        return None
+
+    def ignored(path):
+        if path.name in names:
+            return True
+        if any(fnmatch.fnmatch(str(path), glob) for glob in globs):
+            return True
+        return any(path == tree or tree in path.parents for tree in trees)
+    return ignored
+
+
+def discover(roots, max_depth, skip_hidden=True, ignored=None):
     """Group interesting files by the directory that owns them."""
     found = {}
     for root in roots:
         root = Path(root).expanduser().resolve()
-        if not root.is_dir():
+        if not root.is_dir() or (ignored and ignored(root)):
             continue
         base_depth = len(root.parts)
         for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=False):
@@ -686,6 +718,7 @@ def discover(roots, max_depth, skip_hidden=True):
                 d for d in dirnames
                 if d not in PRUNE
                 and not (skip_hidden and d.startswith(".") and d not in (".github",))
+                and not (ignored and ignored(here / d))
             ]
             hits = [f for f in filenames if f in INTEREST]
             if hits:
@@ -848,10 +881,46 @@ def add_host_layer(graph, include_casks=True):
     return host
 
 
+IGNORE_CASES = [
+    (["~/code/Archive"], "~/code/Archive", True),
+    (["~/code/Archive"], "~/code/Archive/old-app", True),
+    (["~/code/Archive"], "~/code/Active", False),
+    (["Archive"], "~/code/Archive", True),
+    (["Archive"], "~/code/archive", False),
+    (["*/Projects/*"], "~/Desktop/Projects/thing", True),
+    (["*/Projects/*"], "~/Desktop/Steady/api", False),
+    (["*-frontend"], "~/code/admin-frontend", True),
+    ([""], "~/code/anything", False),
+]
+
+
+def selftest():
+    failures = []
+    for patterns, path, expected in IGNORE_CASES:
+        matcher = ignore_matcher(patterns)
+        actual = bool(matcher and matcher(Path(os.path.expanduser(path))))
+        if actual != expected:
+            failures.append(f"  ignore({patterns!r}, {path!r}) = {actual}, want {expected}")
+    if ignore_matcher([]) is not None:
+        failures.append("  an empty ignore list should produce no matcher")
+    if failures:
+        print(f"inventory selftest FAILED ({len(failures)})")
+        print("\n".join(failures))
+        return 1
+    print(f"inventory selftest ok: {len(IGNORE_CASES)} ignore cases")
+    return 0
+
+
 def main():
+    # Checked before the parser, which requires --out for a real run.
+    if "--selftest" in sys.argv[1:]:
+        return selftest()
     ap = argparse.ArgumentParser(description="Build a machine dependency graph")
     ap.add_argument("--roots", nargs="*", default=[str(Path.home())])
     ap.add_argument("--depth", type=int, default=8)
+    ap.add_argument("--ignore", nargs="*", default=[],
+                    help="skip these while walking: a folder path, a bare directory name "
+                         "to prune anywhere, or a glob matched against the full path")
     ap.add_argument("--out", required=True)
     ap.add_argument("--no-host", action="store_true")
     ap.add_argument("--include-hidden", action="store_true")
@@ -863,7 +932,8 @@ def main():
     if host is None:
         host = graph.node("host", kind="host", name=os.uname().nodename, ecosystem="host")
 
-    discovered = discover(args.roots, args.depth, skip_hidden=not args.include_hidden)
+    discovered = discover(args.roots, args.depth, skip_hidden=not args.include_hidden,
+                          ignored=ignore_matcher(args.ignore))
     project_dirs = sorted(discovered)
     skipped_binary = []
 
@@ -907,6 +977,7 @@ def main():
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "roots": [str(Path(r).expanduser().resolve()) for r in args.roots],
+        "ignored": list(args.ignore),
         "depth": args.depth,
         "stats": {
             "nodes": len(graph.nodes), "edges": len(graph.edges),

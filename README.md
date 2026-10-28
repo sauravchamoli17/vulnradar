@@ -42,13 +42,16 @@ evidence, and a graph where every project is a cluster coloured by its worst fin
 
 ![One cluster per project, coloured by worst finding](docs/graph.png)
 
-Scans can run on a clock ("every weekday at 09:00"), with or without the app open.
+Settings picks the folders to scan and the folders to skip — old clients and archives you
+no longer work on, excluded whichever scope you chose. Scans can run on a clock ("every
+weekday at 09:00"), with or without the app open.
 
 It is also a plain CLI:
 
 ```bash
 bash scripts/radar.sh --days 14                 # everything in your home folder
 bash scripts/radar.sh --roots ~/code --days 7   # one tree, tighter window
+bash scripts/radar.sh --ignore ~/old-clients "*/Archive/*"   # skip what you left behind
 bash scripts/radar.sh --no-deep                 # skip osv-scanner, advisory window only
 bash scripts/radar.sh --selftest                # version-matching tests
 ```

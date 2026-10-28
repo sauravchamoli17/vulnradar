@@ -116,6 +116,9 @@ final class Scheduler {
             let trimmed = root.trimmingCharacters(in: .whitespaces)
             if !trimmed.isEmpty { args.append(contentsOf: ["--roots", trimmed]) }
         }
+        for pattern in Settings.ignoredFolders {
+            args.append(contentsOf: ["--ignore", pattern])
+        }
         if Settings.deepScan { args.append("--deep") }
         let argXML = args.map { "    <string>\($0)</string>" }.joined(separator: "\n")
         let logPath = Settings.resolvedOutput + "/scheduled-scan.log"
