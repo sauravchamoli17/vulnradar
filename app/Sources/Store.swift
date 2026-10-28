@@ -11,10 +11,19 @@ struct Settings {
     @AppStorage("windowDays") static var windowDays = 14
     @AppStorage("deepScan") static var deepScan = false
 
+    /// The scanner shipped inside the app, falling back to a skill checkout.
+    ///
+    /// The bundled copy is what a downloaded build runs; the checkout path is what a
+    /// clone of this repo runs, so working on the scripts does not mean rebuilding the
+    /// app to see the change. An explicit path in Settings beats both.
     static var resolvedScript: String {
-        scriptPath.isEmpty
-            ? NSHomeDirectory() + "/.claude/skills/vuln-radar/scripts/radar.sh"
-            : scriptPath
+        if !scriptPath.isEmpty { return scriptPath }
+        let bundled = Bundle.main.resourceURL?
+            .appendingPathComponent("scripts/radar.sh").path
+        if let bundled, FileManager.default.isReadableFile(atPath: bundled) {
+            return bundled
+        }
+        return NSHomeDirectory() + "/.claude/skills/vuln-radar/scripts/radar.sh"
     }
     static var resolvedOutput: String {
         outputDir.isEmpty ? NSHomeDirectory() + "/.claude/vuln-radar/latest" : outputDir

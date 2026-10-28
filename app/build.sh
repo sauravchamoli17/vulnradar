@@ -15,6 +15,13 @@ echo "building ${APP_NAME}…"
 rm -rf "$APP"
 mkdir -p "${APP}/Contents/MacOS" "${APP}/Contents/Resources"
 
+# The app is a front end for the scripts; ship them inside it. Without this the download
+# only works on a machine that happens to have this repo at ~/.claude/skills/vuln-radar.
+SCRIPTS_SRC="$(cd "${SRC_DIR}/.." && pwd)/scripts"
+[ -d "$SCRIPTS_SRC" ] || { echo "scripts/ not found beside app/ — cannot bundle the scanner" >&2; exit 1; }
+cp -R "$SCRIPTS_SRC" "${APP}/Contents/Resources/scripts"
+chmod +x "${APP}/Contents/Resources/scripts/radar.sh"
+
 cat > "${APP}/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

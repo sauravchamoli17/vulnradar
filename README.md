@@ -29,6 +29,10 @@ Or grab `VulnRadar.dmg` from [Releases](../../releases). The build is ad-hoc sig
 notarised, so macOS blocks the first launch — right-click → **Open**, or
 `xattr -dr com.apple.quarantine /Applications/VulnRadar.app`.
 
+The scanner ships inside the app, but it runs on `python3` (3.11+ to read TOML
+lockfiles). If `python3 --version` gives you nothing, install the Xcode Command Line
+Tools with `xcode-select --install`.
+
 To build it yourself: `cd app && bash build.sh`. Needs the Xcode Command Line Tools and
 nothing else — no project file, no package manager, no dependencies.
 
