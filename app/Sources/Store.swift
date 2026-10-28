@@ -61,6 +61,8 @@ final class Store: ObservableObject {
     @Published private(set) var projects: [ProjectGroup] = []
     @Published private(set) var isScanning = false
     @Published private(set) var progress = ""
+    @Published private(set) var stageName = ""
+    @Published private(set) var stageIndex = 0
     @Published private(set) var lastError: String?
     @Published private(set) var lastScan: Date?
 
@@ -122,6 +124,8 @@ final class Store: ObservableObject {
         let previousP0 = findings?.count(.p0) ?? 0
         isScanning = true
         progress = "Starting…"
+        stageName = ""
+        stageIndex = 0
         lastError = nil
 
         var args = [script,
@@ -155,6 +159,13 @@ final class Store: ObservableObject {
             guard !chunk.isEmpty, let text = String(data: chunk, encoding: .utf8) else { return }
             let lines = text.split(separator: "\n").map(String.init)
                 .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            for line in lines {
+                guard let stage = Store.stage(of: line) else { continue }
+                Task { @MainActor in
+                    self.stageIndex = stage.index
+                    self.stageName = stage.name
+                }
+            }
             guard let last = lines.last else { return }
             Task { @MainActor in self.progress = last }
         }
@@ -166,6 +177,8 @@ final class Store: ObservableObject {
                 self.isScanning = false
                 self.process = nil
                 self.progress = ""
+                self.stageName = ""
+                self.stageIndex = 0
                 // radar.sh exits 2 when it finds P0s; that is a result, not a failure.
                 if finished.terminationStatus > 2 {
                     self.lastError = "Scan failed (exit \(finished.terminationStatus))"
@@ -193,6 +206,25 @@ final class Store: ObservableObject {
         process = nil
         isScanning = false
         progress = ""
+        stageName = ""
+        stageIndex = 0
+    }
+
+    /// The scanner announces each stage as `== 2/4 intel  (…)` and closes with
+    /// `== done`, which is the only progress it reports. `2b` counts as stage 2.
+    nonisolated static let stageCount = 4
+
+    private nonisolated static func stage(of line: String) -> (index: Int, name: String)? {
+        guard line.hasPrefix("== ") else { return nil }
+        let parts = line.dropFirst(3).split(separator: " ", maxSplits: 1)
+        guard let counter = parts.first else { return nil }
+        if counter == "done" { return (stageCount, "done") }
+        guard counter.contains("/"),
+              let index = Int(counter.prefix(while: \.isNumber)) else { return nil }
+        let name = parts.count > 1
+            ? parts[1].split(separator: " ").first.map(String.init) ?? ""
+            : ""
+        return (index, name)
     }
 
     func open(_ url: URL) {

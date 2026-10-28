@@ -424,7 +424,7 @@ struct Overview: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.xl) {
                 if store.findings == nil {
-                    emptyState
+                    if store.isScanning { scanningState } else { emptyState }
                 } else {
                     malwareBanner
                     header
@@ -441,6 +441,29 @@ struct Overview: View {
             .padding(.vertical, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// A first scan has nothing to show yet, so without this the pane sits on the
+    /// empty state's call to action while the scan is already running.
+    private var scanningState: some View {
+        VStack(spacing: Space.m) {
+            ProgressView().controlSize(.large)
+            Text("Scanning…").font(TypeScale.title).foregroundStyle(Theme.text)
+            Text(store.stageName.isEmpty ? "starting" : store.stageName)
+                .font(TypeScale.mono).foregroundStyle(Theme.secondary)
+            HStack(spacing: Space.xs) {
+                ForEach(1...Store.stageCount, id: \.self) { stage in
+                    Capsule()
+                        .fill(stage <= store.stageIndex
+                              ? Theme.accent : Theme.text.opacity(0.12))
+                        .frame(width: 46, height: 4)
+                }
+            }
+            Text(store.progress)
+                .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                .lineLimit(1).truncationMode(.middle).frame(maxWidth: 380)
+        }
+        .frame(maxWidth: .infinity).padding(.top, 90)
     }
 
     private var emptyState: some View {
