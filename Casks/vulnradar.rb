@@ -1,8 +1,8 @@
 # Copy this into a homebrew-tap repo at Casks/vulnradar.rb, then users run:
 #   brew install --cask sauravchamoli17/tap/vulnradar
 cask "vulnradar" do
-  version "1.0.2"
-  sha256 "REPLACE_WITH_SHA_FROM_THE_RELEASE"
+  version "1.0.0"
+  sha256 "d582d63a89caef974f133c35aaf93ebd5bbdaed7efd65ddb0c6293c53b8021a3"
 
   url "https://github.com/sauravchamoli17/vulnradar/releases/download/v#{version}/VulnRadar.app.zip"
   name "Vulnerability Radar"
