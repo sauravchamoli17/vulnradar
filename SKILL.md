@@ -46,7 +46,7 @@ bash "$RADAR" --days 14
 Use a 600000 ms (10 min) timeout. Common variations:
 
 ```bash
-bash "$RADAR" --roots ~/Desktop/Steady --days 7      # one tree, tighter window
+bash "$RADAR" --roots ~/code --days 7                 # one tree, tighter window
 bash "$RADAR" --days 3 --severity "high critical"     # "what dropped this week that matters"
 bash "$RADAR" --no-deep                               # skip osv-scanner, window only (faster)
 bash "$RADAR" --out /path/in/session/folder           # so the report opens in the app's file pane
@@ -98,7 +98,8 @@ When nothing matches, say so in one line; a clean sweep is a real result and doe
 padding.
 
 If a finding is a **malicious package** (`MAL-*`, only surfaced by `--deep`), stop and escalate:
-that is a compromise, not a patch. Follow the escalation steps in `steady-supply-chain-scan`.
+that is a compromise, not a patch: quarantine the project, do not install or build, and
+rotate every credential reachable from it.
 
 ## Limits
 
@@ -145,12 +146,6 @@ across repos, and `MAL-*` malicious-package advisories. Detection resolves SSH a
 `ssh -G`, so a remote like `git@work:org/repo` is still recognised as GitHub, and it reads
 `.github/dependabot.yml` for `open-pull-requests-limit: 0` and bare `dependency-name` ignores
 (which suppress security PRs too, unlike semver-scoped ones).
-
-## Related
-
-- `steady-supply-chain-scan` — malware and compromised-package focus (`MAL-*`, Shai-Hulud,
-  BeaverTail) across the Steady repos. Different question: *is any of this infected*, versus this
-  skill's *is any of this vulnerable*. Run that one after a publicized npm incident.
 
 ## Maintenance
 

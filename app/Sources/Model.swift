@@ -336,7 +336,7 @@ extension ProjectGroup {
 }
 
 /// Projects rolled up by their parent directory, so a machine-wide scan reads as
-/// "Steady has 24, Siempi has 6" instead of a flat list of a hundred repos.
+/// "work has 24, side-projects has 6" instead of a flat list of a hundred repos.
 struct FolderGroup: Identifiable, Hashable {
     var id: String { path }
     let path: String

@@ -61,8 +61,8 @@ fi
 [ -n "$ROOTS" ] || ROOTS="$HOME_DIR"
 
 mkdir -p "$OUT" "$STATE_DIR"
-# State lives beside the output, so a Steady-only scan never diffs
-# against a whole-machine one.
+# State lives beside the output, so a scoped scan never diffs against a
+# whole-machine one.
 PREV="${OUT}/previous-findings.json"
 
 step() { printf '\n== %s\n' "$1"; }

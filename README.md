@@ -28,7 +28,7 @@ which of your projects a newly published advisory lands in. A full sweep of ~220
 ### Homebrew (recommended)
 
 ```bash
-brew install --cask <your-github-user>/tap/vulnradar
+brew install --cask sauravchamoli17/tap/vulnradar
 ```
 
 ### Download
@@ -47,7 +47,7 @@ xattr -dr com.apple.quarantine /Applications/VulnRadar.app
 ### Build from source
 
 ```bash
-git clone https://github.com/<your-github-user>/vulnradar
+git clone https://github.com/sauravchamoli17/vulnradar
 cd vulnradar/app && bash build.sh
 ```
 
