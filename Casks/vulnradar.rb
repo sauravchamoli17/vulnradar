@@ -17,7 +17,8 @@ cask "vulnradar" do
   # `appdir` is not in scope inside this block and there is no {{appdir}} token, so the
   # app is reached by changing into it instead of naming its full path.
   postflight_steps do
-    run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "."],
+    run "/usr/bin/xattr",
+        args:  ["-dr", "com.apple.quarantine", "."],
         chdir: "VulnRadar.app"
   end
 
