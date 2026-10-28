@@ -12,7 +12,7 @@ ROOTS=""
 DAYS=14
 DEPTH=8
 KEV_DAYS=90
-DEEP=0
+DEEP=1
 NO_HOST=0
 SEVERITY=""
 TITLE="Vulnerability radar"
@@ -26,7 +26,8 @@ Usage: radar.sh [options]
   --depth N                 directory walk depth          (default: 8)
   --kev-days N              KEV window for host leads     (default: 90)
   --severity "high critical"  only fetch these severities
-  --deep                    also run osv-scanner for full advisory history (slow)
+  --deep                    run osv-scanner for full advisory history (default)
+  --no-deep, --fast         skip osv-scanner; match only the advisory window
   --no-host                 skip the host layer (brew, runtimes, images)
   --out DIR                 output directory               (default: ~/.claude/vuln-radar/latest)
   --title "..."             title for the rendered graph
@@ -42,6 +43,7 @@ while [ $# -gt 0 ]; do
     --kev-days) KEV_DAYS="$2"; shift 2 ;;
     --severity) SEVERITY="$2"; shift 2 ;;
     --deep) DEEP=1; shift ;;
+    --no-deep|--fast) DEEP=0; shift ;;
     --no-host) NO_HOST=1; shift ;;
     --out) OUT="$2"; shift 2 ;;
     --title) TITLE="$2"; shift 2 ;;
@@ -82,7 +84,7 @@ SEV_FLAG=""
 OSV_FLAG=""
 if [ "$DEEP" -eq 1 ]; then
   if command -v osv-scanner >/dev/null 2>&1; then
-    step "2b/4 deep scan (osv-scanner: every advisory ever, not just the window)"
+    step "2b/4 osv-scanner (every advisory ever, not just the window)"
     PARTS=""
     i=0
     for root in $ROOTS; do
@@ -112,7 +114,8 @@ MERGE
       echo "osv-scanner produced no results"
     fi
   else
-    echo "--deep needs osv-scanner (brew install osv-scanner); continuing without it"
+    echo "osv-scanner not found — install it (brew install osv-scanner) for full"
+    echo "advisory history; continuing with the advisory window only"
   fi
 fi
 

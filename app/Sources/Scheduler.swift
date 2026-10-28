@@ -27,6 +27,11 @@ struct ScanSchedule {
 
     static func isOn(_ index: Int) -> Bool { daysMask & (1 << index) != 0 }
 
+    /// Just the time, for the sidebar footer where space is tight.
+    static var clockLabel: String {
+        String(format: "%02d:%02d", hour, minute)
+    }
+
     static var summary: String {
         guard enabled else { return "Off" }
         let time = String(format: "%02d:%02d", hour, minute)

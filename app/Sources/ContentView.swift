@@ -13,6 +13,10 @@ struct ContentView: View {
     @State private var mode: ViewMode = .list
     @AppStorage("grouping") private var grouping = "urgency"
     @State private var collapsed: Set<String> = []
+    @State private var hovered: String?
+    @AppStorage("scheduleEnabled") private var scheduleOn = false
+    @AppStorage("scheduleHour") private var scheduleHour = 9
+    @AppStorage("scheduleMinute") private var scheduleMinute = 0
 
     private var visible: [ProjectGroup] {
         var list = store.projects
@@ -26,17 +30,16 @@ struct ContentView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            toolbar
+        HStack(spacing: 0) {
+            sidebar.frame(width: 268)
             Divider().overlay(Theme.hairline)
-            HSplitView {
-                sidebar.frame(minWidth: 230, idealWidth: 252, maxWidth: 340)
-                content.frame(minWidth: 560)
+            VStack(spacing: 0) {
+                toolbar
+                contentPanel
             }
-            Divider().overlay(Theme.hairline)
-            statusBar
+            .frame(maxWidth: .infinity)
         }
-        .background(Theme.bg)
+        .background(VisualEffect(material: .underWindowBackground).ignoresSafeArea())
         .preferredColorScheme(.dark)
         .sheet(isPresented: $showSettings) { SettingsView() }
         .onAppear { store.loadFromDisk() }
@@ -49,10 +52,10 @@ struct ContentView: View {
         }
     }
 
-    // MARK: toolbar — one primary action, everything else quiet
+    // MARK: toolbar — sits in the title bar strip, one primary action
 
     private var toolbar: some View {
-        HStack(spacing: Space.m) {
+        HStack(spacing: Space.s) {
             Segmented(options: [(ViewMode.list, "List", "list.bullet.indent"),
                                 (ViewMode.graph, "Graph",
                                  "point.3.connected.trianglepath.dotted")],
@@ -60,15 +63,24 @@ struct ContentView: View {
 
             if store.isScanning {
                 Text(store.progress.isEmpty ? "Scanning…" : store.progress)
-                    .font(TypeScale.caption).foregroundStyle(Theme.secondary)
+                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
                     .lineLimit(1).truncationMode(.middle)
+            } else if let error = store.lastError {
+                HStack(spacing: 5) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 9)).foregroundStyle(Band.p1.tint)
+                    Text(error).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 300)
+                }
             }
 
             Spacer(minLength: Space.s)
 
+            scheduleButton
             if store.isScanning {
                 Button("Stop") { store.cancelScan() }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                     .font(TypeScale.strong).foregroundStyle(Band.p0.tint)
             } else {
                 PrimaryButton(title: "Scan", symbol: "arrow.clockwise") { store.scan() }
@@ -85,37 +97,52 @@ struct ContentView: View {
             IconButton(symbol: "gearshape", help: "Settings  ⌘,") { showSettings = true }
                 .keyboardShortcut(",", modifiers: .command)
         }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, Space.s)
-        .background(Theme.bg)
+        .padding(.horizontal, Space.l)
+        .frame(height: Theme.toolbarHeight)
     }
 
-    // MARK: content
+    // MARK: content — one inset panel, Sonoma style
 
-    @ViewBuilder
-    private var content: some View {
-        if mode == .graph {
-            GraphPane()
-        } else if let path = selection,
-                  let project = store.projects.first(where: { $0.path == path }) {
-            ProjectDetail(project: project)
-        } else {
-            Overview(selection: $selection)
-        }
+    private var contentPanel: some View {
+        RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
+            .fill(Theme.contentPanel)
+            .overlay(
+                RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.07), lineWidth: 0.5)
+            )
+            .overlay(
+                Group {
+                    if mode == .graph {
+                        GraphPane(focus: selection)
+                    } else if let path = selection,
+                              let project = store.projects.first(where: { $0.path == path }) {
+                        ProjectDetail(project: project)
+                    } else {
+                        Overview(selection: $selection, bandFilter: $bandFilter)
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous))
+            )
+            .shadow(color: .black.opacity(0.28), radius: 2, y: 1)
+            .padding(.leading, Space.m - 1)
+            .padding(.trailing, 14)
+            .padding(.bottom, 14)
     }
 
-    // MARK: sidebar — search, grouping, list. Nothing else.
+    // MARK: sidebar — material, search, list, standing state at the foot
 
     private var sidebar: some View {
         VStack(spacing: 0) {
+            // Clear strip the traffic lights sit on.
+            Color.clear.frame(height: Theme.toolbarHeight - 6)
+
             VStack(spacing: Space.s) {
                 searchField
                 Segmented(options: [("urgency", "Urgency", nil), ("folder", "Folder", nil)],
                           selection: $grouping)
             }
-            .padding(Space.s)
-
-            Divider().overlay(Theme.hairline)
+            .padding(.horizontal, Space.m)
+            .padding(.bottom, Space.s)
 
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 1, pinnedViews: [.sectionHeaders]) {
@@ -141,13 +168,61 @@ struct ContentView: View {
                 }
                 .padding(.bottom, Space.m)
             }
+
+            Divider().overlay(Theme.hairline)
+            sidebarFooter
         }
-        .background(Theme.sidebar)
+        .background(VisualEffect(material: .sidebar).ignoresSafeArea())
+    }
+
+    private var sidebarFooter: some View {
+        HStack(spacing: Space.s) {
+            GlowDot(color: headlineTint, size: 7)
+            Text(store.headline).font(TypeScale.strong).foregroundStyle(Theme.text)
+                .lineLimit(1)
+            Spacer(minLength: Space.xs)
+            if let last = store.lastScan {
+                Text(last.formatted(.relative(presentation: .numeric)))
+                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary).lineLimit(1)
+            }
+        }
+        .padding(.horizontal, Space.m + 2)
+        .frame(height: 38)
+    }
+
+    /// Scheduled scans sit beside the manual one: "run it now" and "run it on a clock"
+    /// are the same decision, so they belong together.
+    private var scheduleButton: some View {
+        Button { showSchedule.toggle() } label: {
+            HStack(spacing: 5) {
+                Image(systemName: scheduleOn ? "clock.fill" : "clock")
+                    .font(.system(size: 11, weight: .medium))
+                Text(scheduleOn ? String(format: "%02d:%02d", scheduleHour, scheduleMinute)
+                                : "Schedule")
+                    .font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(scheduleOn ? Theme.accent : Theme.secondary)
+            .fixedSize()
+            .padding(.horizontal, Space.m)
+            .padding(.vertical, 5)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(scheduleOn ? Theme.accent.opacity(0.14) : Color.white.opacity(0.05)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .strokeBorder(scheduleOn ? Theme.accent.opacity(0.35)
+                                         : Color.white.opacity(0.09), lineWidth: 0.5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help(ScanSchedule.summary)
+        .popover(isPresented: $showSchedule, arrowEdge: .bottom) {
+            SchedulePopover().environmentObject(store)
+        }
     }
 
     private var emptyList: some View {
         Text(store.findings == nil ? "No scan yet" : "Nothing matches")
-            .font(TypeScale.small).foregroundStyle(Theme.tertiary)
+            .font(TypeScale.body).foregroundStyle(Theme.tertiary)
             .padding(.horizontal, Space.m).padding(.top, Space.l)
     }
 
@@ -156,28 +231,32 @@ struct ContentView: View {
             Image(systemName: "magnifyingglass")
                 .font(.system(size: 11)).foregroundStyle(Theme.tertiary)
             TextField("Search", text: $query)
-                .textFieldStyle(.plain).font(TypeScale.small).foregroundStyle(Theme.text)
+                .textFieldStyle(.plain).font(TypeScale.body).foregroundStyle(Theme.text)
             if !query.isEmpty {
                 Button { query = "" } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.system(size: 10)).foregroundStyle(Theme.tertiary)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
             }
         }
-        .padding(.horizontal, Space.s).padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.surface))
+        .padding(.horizontal, Space.s + 2)
+        .frame(height: 26)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
+        .overlay(RoundedRectangle(cornerRadius: 7)
+            .strokeBorder(Color.white.opacity(0.08), lineWidth: 0.5))
     }
 
     private func bandHeader(_ band: Band, count: Int) -> some View {
         HStack {
-            SectionLabel(text: "\(band.rawValue) · \(band.title)")
+            SectionLabel(text: band.title)
             Spacer()
-            Text("\(count)").font(TypeScale.micro).foregroundStyle(Theme.tertiary)
+            Text("\(count)").font(TypeScale.micro).foregroundStyle(Theme.tertiary.opacity(0.8))
         }
-        .padding(.horizontal, Space.m)
+        .padding(.horizontal, Space.m + 3)
         .padding(.top, Space.m).padding(.bottom, Space.xs)
-        .background(Theme.sidebar)
+        .background(.ultraThinMaterial)
     }
 
     private func folderHeader(_ folder: FolderGroup) -> some View {
@@ -190,28 +269,31 @@ struct ContentView: View {
                     .font(.system(size: 8, weight: .bold)).foregroundStyle(Theme.tertiary)
                     .rotationEffect(.degrees(isCollapsed ? 0 : 90))
                 GlowDot(color: folder.band.tint, size: 5, glow: false)
-                Text(folder.name).font(TypeScale.micro).tracking(0.3)
-                    .foregroundStyle(Theme.secondary).lineLimit(1).truncationMode(.head)
+                Text(folder.name).font(TypeScale.micro).tracking(0.5)
+                    .foregroundStyle(Theme.tertiary).lineLimit(1).truncationMode(.head)
                 Spacer()
                 Text("\(folder.projects.count)")
-                    .font(TypeScale.micro).foregroundStyle(Theme.tertiary)
+                    .font(TypeScale.micro).foregroundStyle(Theme.tertiary.opacity(0.8))
             }
-            .padding(.horizontal, Space.m)
+            .padding(.horizontal, Space.m + 3)
             .padding(.top, Space.m).padding(.bottom, Space.xs)
-            .background(Theme.sidebar)
+            .background(.ultraThinMaterial)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .pointerCursor()
     }
 
     private func projectRow(_ project: ProjectGroup) -> some View {
         let active = selection == project.path
-        return Button { selection = project.path; mode = .list } label: {
-            HStack(spacing: Space.s) {
-                GlowDot(color: project.band.tint, size: 6, glow: project.band <= .p1)
+        // Selecting stays in whichever view you are in: the list shows the detail,
+        // the graph focuses that project's cluster.
+        return Button { selection = project.path } label: {
+            HStack(spacing: Space.s + 2) {
+                GlowDot(color: project.band.tint, size: 7, glow: active && project.band <= .p1)
                 Text(project.name)
-                    .font(active ? TypeScale.strong : TypeScale.body)
-                    .foregroundStyle(active ? Theme.text : Theme.text.opacity(0.85))
+                    .font(active ? Font.system(size: 13, weight: .semibold) : TypeScale.body)
+                    .foregroundStyle(active ? .white : Theme.text.opacity(0.84))
                     .lineLimit(1)
                 Spacer(minLength: Space.xs)
                 if project.kev {
@@ -219,96 +301,20 @@ struct ContentView: View {
                         .font(.system(size: 8)).foregroundStyle(Band.p0.tint)
                 }
                 Text("\(project.items.count)")
-                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary).monospacedDigit()
+                    .font(TypeScale.mono).foregroundStyle(Theme.tertiary).monospacedDigit()
             }
-            .padding(.horizontal, Space.s).padding(.vertical, 5)
+            .padding(.horizontal, Space.s + 1)
+            .frame(height: 28)
             .background(RoundedRectangle(cornerRadius: 6)
-                .fill(active ? Theme.accent.opacity(0.15) : .clear))
+                .fill(active ? Theme.accent : (hovered == project.path
+                                               ? Color.white.opacity(0.06) : .clear)))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 6)
-    }
-
-    // MARK: status bar — standing state lives here, not stacked in the sidebar
-
-    private var statusBar: some View {
-        HStack(spacing: Space.m) {
-            HStack(spacing: 6) {
-                GlowDot(color: headlineTint, size: 7)
-                Text(store.headline).font(TypeScale.small).foregroundStyle(Theme.text)
-            }
-
-            if store.findings != nil {
-                DistributionBar(counts: bandCounts).frame(width: 84)
-                HStack(spacing: Space.xs) {
-                    ForEach(Band.allCases, id: \.self) { bandFilterChip($0) }
-                }
-            }
-
-            Spacer(minLength: Space.s)
-
-            if let error = store.lastError {
-                HStack(spacing: 5) {
-                    Image(systemName: "exclamationmark.triangle.fill")
-                        .font(.system(size: 9)).foregroundStyle(Band.p1.tint)
-                    Text(error).font(TypeScale.caption).foregroundStyle(Theme.secondary)
-                        .lineLimit(1).truncationMode(.middle).frame(maxWidth: 260)
-                }
-            }
-
-            scheduleChip
-
-            if let last = store.lastScan {
-                Text(last.formatted(.relative(presentation: .numeric)))
-                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, Space.m)
-        .padding(.vertical, 6)
-        .background(Theme.sidebar)
-    }
-
-    private var scheduleChip: some View {
-        Button { showSchedule.toggle() } label: {
-            HStack(spacing: 5) {
-                Image(systemName: ScanSchedule.enabled ? "clock.fill" : "clock")
-                    .font(.system(size: 9))
-                Text(store.nextScanText ?? "No schedule").font(TypeScale.caption)
-            }
-            .foregroundStyle(ScanSchedule.enabled ? Theme.accent : Theme.tertiary)
-            .fixedSize()
-            .padding(.horizontal, Space.s).padding(.vertical, 3)
-            .background(RoundedRectangle(cornerRadius: 6)
-                .fill(ScanSchedule.enabled ? Theme.accent.opacity(0.12) : Theme.surface))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .popover(isPresented: $showSchedule, arrowEdge: .top) {
-            SchedulePopover().environmentObject(store)
-        }
-    }
-
-    private func bandFilterChip(_ band: Band) -> some View {
-        let count = store.findings?.count(band) ?? 0
-        let active = bandFilter == band
-        return Button {
-            bandFilter = active ? nil : band
-            selection = nil
-        } label: {
-            HStack(spacing: 3) {
-                GlowDot(color: band.tint, size: 5, glow: active)
-                Text("\(count)").font(TypeScale.caption)
-                    .foregroundStyle(active ? band.tint : Theme.secondary).monospacedDigit()
-            }
-            .padding(.horizontal, 5).padding(.vertical, 2)
-            .background(RoundedRectangle(cornerRadius: 5)
-                .fill(active ? band.tint.opacity(0.15) : .clear))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .help("\(band.rawValue) — \(band.blurb)")
+        .pointerCursor()
+        .onHover { hovered = $0 ? project.path : (hovered == project.path ? nil : hovered) }
+        .padding(.horizontal, Space.s + 1)
+        .id(project.path)
     }
 
     private var headlineTint: Color {
@@ -317,12 +323,6 @@ struct ContentView: View {
         if findings.count(.p1) > 0 { return Band.p1.tint }
         return Theme.good
     }
-
-    private var bandCounts: [Band: Int] {
-        Dictionary(uniqueKeysWithValues: Band.allCases.map {
-            ($0, store.findings?.count($0) ?? 0)
-        })
-    }
 }
 
 // MARK: - Overview
@@ -330,6 +330,7 @@ struct ContentView: View {
 struct Overview: View {
     @EnvironmentObject var store: Store
     @Binding var selection: String?
+    @Binding var bandFilter: Band?
 
     var body: some View {
         ScrollView {
@@ -344,10 +345,10 @@ struct Overview: View {
                     scanPanel
                 }
             }
-            .padding(Space.xl)
+            .padding(.horizontal, 26)
+            .padding(.vertical, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.bg)
     }
 
     private var emptyState: some View {
@@ -357,39 +358,57 @@ struct Overview: View {
             Text("No scan yet").font(TypeScale.title).foregroundStyle(Theme.text)
             Text("Builds a dependency graph of your projects and matches it against "
                  + "advisories published in the last two weeks.")
-                .font(TypeScale.small).foregroundStyle(Theme.secondary)
+                .font(TypeScale.body).foregroundStyle(Theme.secondary)
                 .multilineTextAlignment(.center).frame(maxWidth: 360)
             PrimaryButton(title: "Run first scan", symbol: "play.fill") { store.scan() }
                 .padding(.top, Space.xs)
         }
-        .frame(maxWidth: .infinity).padding(.top, 80)
+        .frame(maxWidth: .infinity).padding(.top, 90)
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
-            Text(store.headline).font(TypeScale.heading).foregroundStyle(Theme.text)
+            Text(store.headline).font(TypeScale.heading).tracking(-0.3)
+                .foregroundStyle(Theme.text)
             Text(store.subhead).font(TypeScale.body).foregroundStyle(Theme.secondary)
         }
     }
 
+    /// The stat tiles double as the band filter — one control, not two.
     private var tiles: some View {
-        HStack(spacing: Space.s) {
+        HStack(spacing: Space.s + 2) {
             ForEach(Band.allCases, id: \.self) { band in
                 let count = store.findings?.count(band) ?? 0
-                Panel(padding: Space.m) {
-                    VStack(alignment: .leading, spacing: Space.xs) {
-                        HStack(spacing: 5) {
+                let active = bandFilter == band
+                Button {
+                    bandFilter = active ? nil : band
+                    selection = nil
+                } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        HStack(spacing: 6) {
                             GlowDot(color: band.tint, size: 6, glow: count > 0 && band <= .p1)
-                            Text(band.rawValue).font(TypeScale.micro)
+                            Text(band.rawValue).font(TypeScale.micro).tracking(0.5)
                                 .foregroundStyle(band.tint)
+                            Spacer()
                         }
-                        Text("\(count)").font(TypeScale.stat)
+                        Text("\(count)").font(TypeScale.stat).tracking(-0.5)
                             .foregroundStyle(count > 0 ? Theme.text : Theme.tertiary)
                             .monospacedDigit()
                         Text(band.title).font(TypeScale.caption)
-                            .foregroundStyle(Theme.secondary)
+                            .foregroundStyle(Theme.tertiary)
                     }
+                    .padding(.horizontal, 14).padding(.vertical, 13)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(Color.white.opacity(active ? 0.075 : 0.035)))
+                    .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .strokeBorder(active ? band.tint.opacity(0.45)
+                                             : Color.white.opacity(0.05), lineWidth: 0.5))
+                    .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
+                .pointerCursor()
+                .help("\(band.rawValue) — \(band.blurb)")
             }
         }
     }
@@ -399,38 +418,42 @@ struct Overview: View {
     }
 
     private var risks: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        VStack(alignment: .leading, spacing: Space.s + 2) {
             SectionLabel(text: "Needs action")
             Panel(padding: 0) {
                 VStack(spacing: 0) {
                     ForEach(Array(topRisks.enumerated()), id: \.element.id) { index, project in
                         Button { selection = project.path } label: {
-                            HStack(spacing: Space.s) {
-                                GlowDot(color: project.band.tint, size: 6)
+                            HStack(spacing: Space.s + 3) {
+                                GlowDot(color: project.band.tint, size: 7, glow: false)
                                 Text(project.name).font(TypeScale.strong)
                                     .foregroundStyle(Theme.text)
                                 if project.kev {
-                                    Text("KEV").font(TypeScale.micro)
+                                    Text("KEV").font(.system(size: 9, weight: .bold))
+                                        .tracking(0.4)
                                         .foregroundStyle(Band.p0.tint)
-                                        .padding(.horizontal, 4).padding(.vertical, 1)
-                                        .background(Band.p0.tint.opacity(0.15),
-                                                    in: RoundedRectangle(cornerRadius: 3))
+                                        .padding(.horizontal, 5).padding(.vertical, 2.5)
+                                        .background(Band.p0.tint.opacity(0.16),
+                                                    in: RoundedRectangle(cornerRadius: 4))
                                 }
                                 Spacer()
                                 Text(project.items.prefix(3).map(\.package)
                                     .joined(separator: ", "))
                                     .font(TypeScale.mono).foregroundStyle(Theme.tertiary)
-                                    .lineLimit(1)
+                                    .lineLimit(1).truncationMode(.tail)
+                                    .frame(maxWidth: 260, alignment: .trailing)
                                 Image(systemName: "chevron.right")
                                     .font(.system(size: 9, weight: .semibold))
-                                    .foregroundStyle(Theme.tertiary)
+                                    .foregroundStyle(Theme.tertiary.opacity(0.8))
                             }
-                            .padding(.horizontal, Space.m).padding(.vertical, Space.s)
+                            .padding(.horizontal, 15).padding(.vertical, 11)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
+                        .pointerCursor()
                         if index < topRisks.count - 1 {
-                            Divider().overlay(Theme.hairline).padding(.leading, Space.m)
+                            Divider().overlay(Color.white.opacity(0.055))
+                                .padding(.leading, 15)
                         }
                     }
                 }
@@ -439,12 +462,12 @@ struct Overview: View {
     }
 
     private func leadsPanel(_ leads: [Lead]) -> some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        VStack(alignment: .leading, spacing: Space.s + 2) {
             SectionLabel(text: "Host leads — confirm your version")
             Panel {
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 7) {
                     ForEach(leads.prefix(5), id: \.cve) { lead in
-                        HStack(spacing: Space.s) {
+                        HStack(spacing: Space.s + 2) {
                             Text(lead.cve).font(TypeScale.mono).foregroundStyle(Theme.text)
                             Text("\(lead.vendor ?? "") / \(lead.product ?? "")")
                                 .font(TypeScale.caption).foregroundStyle(Theme.secondary)
@@ -452,6 +475,8 @@ struct Overview: View {
                             if let url = lead.url, let link = URL(string: url) {
                                 Link("advisory", destination: link)
                                     .font(TypeScale.caption).foregroundStyle(Theme.accent)
+                                    .pointerCursor()
+                                    .pointerCursor()
                             }
                         }
                     }
@@ -465,10 +490,10 @@ struct Overview: View {
     }
 
     private var scanPanel: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        VStack(alignment: .leading, spacing: Space.s + 2) {
             SectionLabel(text: "Scan")
             Panel {
-                VStack(spacing: 6) {
+                VStack(spacing: 7) {
                     if let intel = store.findings?.intel {
                         meta("Advisory window",
                              "\(intel.windowDays ?? 0)d · since \(intel.publishedSince ?? "—")")
@@ -477,6 +502,9 @@ struct Overview: View {
                     meta("Packages scanned", "\(store.findings?.graphStats?.packages ?? 0)")
                     meta("Projects scanned", "\(store.findings?.graphStats?.projects ?? 0)")
                     meta("Schedule", ScanSchedule.summary)
+                    if let last = store.lastScan {
+                        meta("Last scan", last.formatted(date: .abbreviated, time: .shortened))
+                    }
                 }
             }
         }
@@ -484,7 +512,7 @@ struct Overview: View {
 
     private func meta(_ key: String, _ value: String) -> some View {
         HStack {
-            Text(key).font(TypeScale.small).foregroundStyle(Theme.secondary)
+            Text(key).font(TypeScale.body).foregroundStyle(Theme.secondary)
             Spacer()
             Text(value).font(TypeScale.mono).foregroundStyle(Theme.text)
         }
@@ -516,43 +544,36 @@ struct ProjectDetail: View {
         ScrollView {
             VStack(alignment: .leading, spacing: Space.l) {
                 header
-                VStack(spacing: 6) {
+                VStack(spacing: Space.s) {
                     ForEach(project.items) { PackageCard(item: $0) }
                 }
                 fixBlock
             }
-            .padding(Space.xl)
+            .padding(.horizontal, 26)
+            .padding(.vertical, 22)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .background(Theme.bg)
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: Space.s) {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: Space.s + 3) {
                 GlowDot(color: project.band.tint, size: 9)
-                Text(project.name).font(TypeScale.heading).foregroundStyle(Theme.text)
+                Text(project.name).font(TypeScale.heading).tracking(-0.3)
+                    .foregroundStyle(Theme.text)
                 if project.kev {
-                    Text("EXPLOITED IN THE WILD").font(TypeScale.micro).tracking(0.4)
+                    Text("EXPLOITED IN THE WILD").font(.system(size: 9, weight: .bold))
+                        .tracking(0.6)
                         .foregroundStyle(Band.p0.tint)
-                        .padding(.horizontal, 6).padding(.vertical, 2)
-                        .background(Band.p0.tint.opacity(0.14),
+                        .padding(.horizontal, 6).padding(.vertical, 3.5)
+                        .background(Band.p0.tint.opacity(0.16),
                                     in: RoundedRectangle(cornerRadius: 4))
                 }
                 Spacer()
             }
-            Text(project.path).font(TypeScale.mono).foregroundStyle(Theme.tertiary)
-                .textSelection(.enabled)
             HStack(spacing: 6) {
-                ForEach(Band.allCases, id: \.self) { band in
-                    if project.count(band) > 0 {
-                        HStack(spacing: 3) {
-                            BandPill(band: band)
-                            Text("\(project.count(band))").font(TypeScale.caption)
-                                .foregroundStyle(Theme.secondary)
-                        }
-                    }
-                }
+                Text(displayPath).font(TypeScale.mono).foregroundStyle(Theme.tertiary)
+                    .textSelection(.enabled)
                 if let stale = project.staleDays {
                     Text("· last commit \(stale)d ago").font(TypeScale.caption)
                         .foregroundStyle(Theme.tertiary)
@@ -565,8 +586,14 @@ struct ProjectDetail: View {
         }
     }
 
+    private var displayPath: String {
+        let home = NSHomeDirectory()
+        return project.path.hasPrefix(home)
+            ? "~" + project.path.dropFirst(home.count) : project.path
+    }
+
     private var fixBlock: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
+        VStack(alignment: .leading, spacing: Space.s + 2) {
             HStack(spacing: Space.s) {
                 Segmented(options: FixMode.allCases.map { ($0, $0.title, $0.symbol) },
                           selection: $fixMode)
@@ -584,6 +611,7 @@ struct ProjectDetail: View {
                     .foregroundStyle(copied ? Theme.good : Theme.secondary)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
                 Button { store.reveal(path: project.path) } label: {
                     HStack(spacing: 5) {
                         Image(systemName: "folder").font(.system(size: 10, weight: .semibold))
@@ -592,14 +620,19 @@ struct ProjectDetail: View {
                     .foregroundStyle(Theme.secondary)
                 }
                 .buttonStyle(.plain)
+                .pointerCursor()
             }
+            Text(fixMode == .commands ? project.fixScript : project.aiPrompt)
+                .font(TypeScale.mono).foregroundStyle(Theme.text.opacity(0.88))
+                .textSelection(.enabled)
+                .lineSpacing(3)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .fill(Theme.sunken))
+                .overlay(RoundedRectangle(cornerRadius: 9, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.05), lineWidth: 0.5))
             Text(fixMode.hint).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-            Panel {
-                Text(fixMode == .commands ? project.fixScript : project.aiPrompt)
-                    .font(TypeScale.mono).foregroundStyle(Theme.text.opacity(0.9))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
         }
     }
 }
@@ -609,18 +642,20 @@ struct PackageCard: View {
     @State private var expanded = false
 
     var body: some View {
-        Panel(padding: Space.m, hoverable: true) {
-            VStack(alignment: .leading, spacing: Space.s) {
-                HStack(spacing: Space.s) {
+        Panel(padding: 14, hoverable: true) {
+            VStack(alignment: .leading, spacing: 7) {
+                HStack(spacing: Space.s + 2) {
                     BandPill(band: item.band)
-                    Text(item.package).font(TypeScale.title).foregroundStyle(Theme.text)
+                    Text(item.package).font(Font.system(size: 14, weight: .semibold))
+                        .foregroundStyle(Theme.text)
                     VersionJump(from: item.installed, to: item.target)
                     if item.kev {
                         Image(systemName: "flame.fill")
                             .font(.system(size: 9)).foregroundStyle(Band.p0.tint)
                     }
                     if item.isNew {
-                        Text("NEW").font(TypeScale.micro).foregroundStyle(Theme.accent)
+                        Text("NEW").font(.system(size: 9, weight: .bold)).tracking(0.4)
+                            .foregroundStyle(Theme.accent)
                     }
                     Spacer()
                     Button {
@@ -635,11 +670,12 @@ struct PackageCard: View {
                         .foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                 }
                 Text(exposure).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
                 if expanded {
-                    Divider().overlay(Theme.hairline)
-                    VStack(alignment: .leading, spacing: Space.s) {
+                    Divider().overlay(Color.white.opacity(0.07)).padding(.vertical, 2)
+                    VStack(alignment: .leading, spacing: 9) {
                         ForEach(item.advisories, id: \.self) { advisoryRow($0) }
                     }
                 }
@@ -648,27 +684,32 @@ struct PackageCard: View {
     }
 
     private func advisoryRow(_ adv: Finding) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 7) {
                 if let url = adv.url, let link = URL(string: url) {
                     Link(adv.advisory ?? adv.cve ?? "advisory", destination: link)
                         .font(TypeScale.mono).foregroundStyle(Theme.accent)
+                        .pointerCursor()
+                        .pointerCursor()
                 } else {
                     Text(adv.advisory ?? "advisory").font(TypeScale.mono)
                         .foregroundStyle(Theme.secondary)
                 }
-                Text((adv.severity ?? "").uppercased()).font(TypeScale.micro)
+                Text((adv.severity ?? "").uppercased())
+                    .font(.system(size: 9.5, weight: .bold)).tracking(0.4)
                     .foregroundStyle(severityTint(adv.severity))
                 if let cvss = adv.cvss {
                     Text("CVSS \(cvss, specifier: "%.1f")").font(TypeScale.caption)
                         .foregroundStyle(Theme.tertiary)
                 }
                 if adv.kev == true {
-                    Text("KEV").font(TypeScale.micro).foregroundStyle(Band.p0.tint)
+                    Text("KEV").font(.system(size: 9.5, weight: .bold))
+                        .foregroundStyle(Band.p0.tint)
                 }
                 Spacer()
             }
-            Text(adv.summary ?? "").font(TypeScale.small).foregroundStyle(Theme.secondary)
+            Text(adv.summary ?? "").font(TypeScale.body).foregroundStyle(Theme.secondary)
+                .lineSpacing(2)
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)

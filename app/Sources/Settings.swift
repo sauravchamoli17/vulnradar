@@ -1,125 +1,93 @@
 import AppKit
 import SwiftUI
 
-/// Scheduling reachable in one click from the status bar, not buried in a settings sheet.
-struct SchedulePopover: View {
-    @EnvironmentObject var store: Store
-    @AppStorage("scheduleEnabled") private var enabled = false
-    @AppStorage("scheduleHour") private var hour = 9
-    @AppStorage("scheduleMinute") private var minute = 0
-    @AppStorage("scheduleDays") private var days = 0b1111111
-    @AppStorage("scheduleAgent") private var useAgent = false
-    @State private var note: String?
+// MARK: - Building blocks
+
+/// A rounded group of rows, as in macOS System Settings: one panel, hairlines between
+/// rows, rather than a box around every individual control.
+struct SettingsGroup<Content: View>: View {
+    let title: String
+    @ViewBuilder var content: Content
 
     var body: some View {
-        VStack(alignment: .leading, spacing: Space.m) {
-            HStack {
-                Text("Scheduled scan").font(TypeScale.title).foregroundStyle(Theme.text)
-                Spacer()
-                Toggle("", isOn: $enabled).toggleStyle(.switch).labelsHidden()
-                    .onChange(of: enabled) { _ in apply() }
-            }
-
-            if enabled {
-                HStack(spacing: Space.s) {
-                    Text("at").font(TypeScale.small).foregroundStyle(Theme.secondary)
-                    DatePicker("", selection: timeBinding, displayedComponents: .hourAndMinute)
-                        .datePickerStyle(.stepperField).labelsHidden().frame(width: 86)
-                        .onChange(of: hour) { _ in apply() }
-                        .onChange(of: minute) { _ in apply() }
-                    Spacer()
-                }
-
-                HStack(spacing: Space.xs) {
-                    ForEach(0..<7, id: \.self) { dayChip($0) }
-                }
-
-                HStack(spacing: Space.xs) {
-                    presetButton("Daily", 0b1111111)
-                    presetButton("Weekdays", 0b0111110)
-                    presetButton("Weekly", 1 << 1)
-                }
-
-                Divider().overlay(Theme.hairline)
-
-                Toggle(isOn: $useAgent) {
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Run when the app is closed").font(TypeScale.strong)
-                            .foregroundStyle(Theme.text)
-                        Text("installs a launchd agent, so the report is ready when you look")
-                            .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-                    }
-                }
-                .toggleStyle(.switch)
-                .onChange(of: useAgent) { _ in apply() }
-
-                HStack(spacing: 5) {
-                    Image(systemName: "clock").font(.system(size: 9))
-                    Text(store.nextScanText.map { "Next run \($0)" } ?? ScanSchedule.summary)
-                        .font(TypeScale.caption)
-                }
-                .foregroundStyle(Theme.secondary)
-
-                if let note {
-                    Text(note).font(TypeScale.caption).foregroundStyle(Band.p1.tint)
-                }
-            } else {
-                Text("Scans run only when you press Scan.")
-                    .font(TypeScale.small).foregroundStyle(Theme.tertiary)
-            }
+        VStack(alignment: .leading, spacing: Space.s) {
+            SectionLabel(text: title)
+            VStack(spacing: 0) { content }
+                .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(Color.white.opacity(0.035)))
+                .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.05), lineWidth: 0.5))
         }
-        .padding(Space.l)
-        .frame(width: 320)
-        .background(Theme.surface)
-    }
-
-    private var timeBinding: Binding<Date> {
-        Binding(
-            get: {
-                Calendar.current.date(from: DateComponents(hour: hour, minute: minute)) ?? Date()
-            },
-            set: { date in
-                let parts = Calendar.current.dateComponents([.hour, .minute], from: date)
-                hour = parts.hour ?? 9
-                minute = parts.minute ?? 0
-            })
-    }
-
-    private func dayChip(_ index: Int) -> some View {
-        let on = days & (1 << index) != 0
-        return Button {
-            let next = days ^ (1 << index)
-            if next != 0 { days = next; apply() }
-        } label: {
-            Text(ScanSchedule.dayNames[index].prefix(1))
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                .foregroundStyle(on ? Color.white : Theme.secondary)
-                .frame(width: 26, height: 24)
-                .background(RoundedRectangle(cornerRadius: 6)
-                    .fill(on ? Theme.accent : Theme.raised))
-        }
-        .buttonStyle(.plain)
-        .help(ScanSchedule.dayNames[index])
-    }
-
-    private func presetButton(_ title: String, _ mask: Int) -> some View {
-        Button { days = mask; apply() } label: {
-            Text(title).font(TypeScale.caption)
-                .foregroundStyle(days == mask ? Theme.accent : Theme.secondary)
-                .padding(.horizontal, Space.s).padding(.vertical, 3)
-                .background(RoundedRectangle(cornerRadius: 5)
-                    .fill(days == mask ? Theme.accent.opacity(0.14) : Theme.raised))
-        }
-        .buttonStyle(.plain)
-    }
-
-    private func apply() {
-        store.scheduleAutoScan()
-        note = (enabled && useAgent) ? Scheduler.installAgent() : {
-            Scheduler.removeAgent(); return nil
-        }()
     }
 }
+
+struct SettingsRow<Trailing: View, Extra: View>: View {
+    let title: String
+    var detail: String? = nil
+    @ViewBuilder var trailing: Trailing
+    @ViewBuilder var extra: Extra
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.s) {
+            HStack(alignment: .firstTextBaseline, spacing: Space.m) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(TypeScale.strong).foregroundStyle(Theme.text)
+                    if let detail {
+                        Text(detail).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: Space.m)
+                trailing
+            }
+            extra
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+}
+
+extension SettingsRow where Extra == EmptyView {
+    init(title: String, detail: String? = nil, @ViewBuilder trailing: () -> Trailing) {
+        self.init(title: title, detail: detail, trailing: trailing, extra: { EmptyView() })
+    }
+}
+
+private struct RowDivider: View {
+    var body: some View {
+        Divider().overlay(Color.white.opacity(0.055)).padding(.leading, 14)
+    }
+}
+
+private struct ChoiceRow: View {
+    let title: String
+    let detail: String
+    let selected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(alignment: .top, spacing: Space.m) {
+                Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+                    .font(.system(size: 14))
+                    .foregroundStyle(selected ? Theme.accent : Theme.tertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title).font(TypeScale.strong).foregroundStyle(Theme.text)
+                    Text(detail).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+}
+
+// MARK: - Settings
 
 struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
@@ -139,66 +107,64 @@ struct SettingsView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text("Settings").font(TypeScale.title).foregroundStyle(Theme.text)
-                Spacer()
-                Button("Done") { dismiss() }.keyboardShortcut(.defaultAction)
-            }
-            .padding(.horizontal, Space.l).padding(.vertical, Space.m)
+            header
             Divider().overlay(Theme.hairline)
-
             ScrollView {
-                VStack(alignment: .leading, spacing: Space.xl) {
-                    scopeSection
-                    depthSection
-                    pathsSection
+                VStack(alignment: .leading, spacing: Space.l + 2) {
+                    scopeGroup
+                    lookGroup
+                    pathsGroup
                 }
-                .padding(Space.l)
+                .padding(.horizontal, Space.l + 2)
+                .padding(.vertical, Space.l)
             }
-
             Divider().overlay(Theme.hairline)
-            HStack(spacing: 5) {
-                Image(systemName: "lock.shield").font(.system(size: 10))
-                Text("Scans are read-only. Fix commands are never run for you.")
-                    .font(TypeScale.caption)
-                Spacer()
-            }
-            .foregroundStyle(Theme.tertiary)
-            .padding(.horizontal, Space.l).padding(.vertical, Space.s)
+            footer
         }
-        .frame(width: 500, height: 540)
-        .background(Theme.bg)
+        .frame(width: 520, height: 596)
+        .background(VisualEffect(material: .underWindowBackground).ignoresSafeArea())
         .preferredColorScheme(.dark)
     }
 
-    private var scopeSection: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            SectionLabel(text: "Where to scan")
-            scopeOption("home", "My whole home folder",
-                        "Finds every project you have, wherever it lives. Slower, nothing missed.")
-            scopeOption("folders", "Specific folders",
-                        "Point it at where your code lives. Faster, and the report stays focused.")
+    private var header: some View {
+        HStack {
+            Text("Settings").font(TypeScale.ui(17, .semibold)).foregroundStyle(Theme.text)
+            Spacer()
+            PrimaryButton(title: "Done", symbol: "checkmark") { dismiss() }
+                .keyboardShortcut(.defaultAction)
+        }
+        .padding(.horizontal, Space.l + 2)
+        .frame(height: 54)
+    }
 
+    private var footer: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "lock.shield").font(.system(size: 11))
+            Text("Scans are read-only. Fix commands are never run for you.")
+                .font(TypeScale.caption)
+            Spacer()
+        }
+        .foregroundStyle(Theme.tertiary)
+        .padding(.horizontal, Space.l + 2)
+        .frame(height: 40)
+    }
+
+    // MARK: where
+
+    private var scopeGroup: some View {
+        SettingsGroup(title: "Where to scan") {
+            ChoiceRow(title: "My whole home folder",
+                      detail: "Finds every project you have, wherever it lives. "
+                            + "Slower, nothing missed.",
+                      selected: scanScope == "home") { scanScope = "home" }
+            RowDivider()
+            ChoiceRow(title: "Specific folders",
+                      detail: "Point it at where your code lives. Faster, and the report "
+                            + "stays focused.",
+                      selected: scanScope == "folders") { scanScope = "folders" }
             if scanScope == "folders" {
                 VStack(alignment: .leading, spacing: 6) {
-                    ForEach(folders, id: \.self) { folder in
-                        HStack(spacing: Space.s) {
-                            Image(systemName: "folder.fill")
-                                .font(.system(size: 10)).foregroundStyle(Theme.accent)
-                            Text(displayPath(folder)).font(TypeScale.mono)
-                                .foregroundStyle(Theme.text)
-                                .lineLimit(1).truncationMode(.head)
-                            Spacer()
-                            Button { remove(folder) } label: {
-                                Image(systemName: "xmark")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .foregroundStyle(Theme.tertiary)
-                            }
-                            .buttonStyle(.plain)
-                        }
-                        .padding(.horizontal, Space.s).padding(.vertical, 6)
-                        .background(RoundedRectangle(cornerRadius: 6).fill(Theme.surface))
-                    }
+                    ForEach(folders, id: \.self) { folderChip($0) }
                     if folders.isEmpty {
                         Text("No folders chosen — the scan falls back to your home folder.")
                             .font(TypeScale.caption).foregroundStyle(Band.p1.tint)
@@ -211,66 +177,88 @@ struct SettingsView: View {
                         .foregroundStyle(Theme.accent)
                     }
                     .buttonStyle(.plain)
+                    .pointerCursor()
                 }
-                .padding(.leading, Space.xl)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.leading, 40)
+                .padding(.trailing, 14)
+                .padding(.bottom, 13)
             }
         }
     }
 
-    private func scopeOption(_ value: String, _ title: String, _ detail: String) -> some View {
-        Button { scanScope = value } label: {
-            HStack(alignment: .top, spacing: Space.s) {
-                Image(systemName: scanScope == value ? "largecircle.fill.circle" : "circle")
-                    .font(.system(size: 13))
-                    .foregroundStyle(scanScope == value ? Theme.accent : Theme.tertiary)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(title).font(TypeScale.strong).foregroundStyle(Theme.text)
-                    Text(detail).font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer()
+    private func folderChip(_ folder: String) -> some View {
+        HStack(spacing: Space.s) {
+            Image(systemName: "folder.fill")
+                .font(.system(size: 10)).foregroundStyle(Theme.accent)
+            Text(displayPath(folder)).font(TypeScale.mono).foregroundStyle(Theme.text)
+                .lineLimit(1).truncationMode(.head)
+            Spacer()
+            Button { remove(folder) } label: {
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold)).foregroundStyle(Theme.tertiary)
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .pointerCursor()
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, Space.m)
+        .frame(height: 30)
+        .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
     }
 
-    private var depthSection: some View {
-        VStack(alignment: .leading, spacing: Space.s) {
-            SectionLabel(text: "What to look for")
-            VStack(alignment: .leading, spacing: Space.xs) {
-                HStack {
-                    Text("Advisory window").font(TypeScale.strong).foregroundStyle(Theme.text)
-                    Spacer()
-                    Text("\(windowDays) days").font(TypeScale.mono).foregroundStyle(Theme.text)
-                }
+    // MARK: what
+
+    private var lookGroup: some View {
+        SettingsGroup(title: "What to look for") {
+            SettingsRow(title: "Advisory window",
+                        detail: "How far back to pull newly published advisories.") {
+                Text("\(windowDays) days").font(TypeScale.mono).foregroundStyle(Theme.text)
+            } extra: {
                 Slider(value: Binding(get: { Double(windowDays) },
                                       set: { windowDays = Int($0) }), in: 1...90, step: 1)
-                Text("How far back to pull newly published advisories.")
-                    .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                    .tint(Theme.accent)
+                    .controlSize(.small)
+                    .pointerCursor()
             }
-            Toggle(isOn: $deepScan) {
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Deep scan").font(TypeScale.strong).foregroundStyle(Theme.text)
-                    Text("adds osv-scanner for the full advisory history — slower")
-                        .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
-                }
+            RowDivider()
+            SettingsRow(title: "Deep scan",
+                        detail: "Adds osv-scanner for the full advisory history. Slower, "
+                              + "but it catches anything disclosed before the window.") {
+                Toggle("", isOn: $deepScan).toggleStyle(.switch).labelsHidden()
+                    .tint(Theme.accent)
+                    .pointerCursor()
             }
-            .toggleStyle(.switch)
         }
     }
 
-    private var pathsSection: some View {
-        DisclosureGroup {
-            VStack(spacing: Space.s) {
-                TextField(Settings.resolvedScript, text: $scriptPath)
-                TextField(Settings.resolvedOutput, text: $outputDir)
-            }
-            .textFieldStyle(.roundedBorder).font(TypeScale.mono).padding(.top, Space.s)
-        } label: {
-            SectionLabel(text: "Advanced paths")
+    // MARK: paths
+
+    private var pathsGroup: some View {
+        SettingsGroup(title: "Advanced") {
+            pathRow("Scan script", text: $scriptPath, placeholder: Settings.resolvedScript)
+            RowDivider()
+            pathRow("Output folder", text: $outputDir, placeholder: Settings.resolvedOutput)
         }
     }
+
+    private func pathRow(_ title: String, text: Binding<String>,
+                         placeholder: String) -> some View {
+        SettingsRow(title: title) {
+            EmptyView()
+        } extra: {
+            TextField(displayPath(placeholder), text: text)
+                .textFieldStyle(.plain)
+                .font(TypeScale.mono)
+                .foregroundStyle(Theme.text)
+                .padding(.horizontal, Space.s + 2)
+                .frame(height: 26)
+                .background(RoundedRectangle(cornerRadius: 7).fill(Theme.sunken))
+                .overlay(RoundedRectangle(cornerRadius: 7)
+                    .strokeBorder(Color.white.opacity(0.06), lineWidth: 0.5))
+        }
+    }
+
+    // MARK: actions
 
     private func displayPath(_ path: String) -> String {
         path.hasPrefix(NSHomeDirectory())
@@ -292,5 +280,126 @@ struct SettingsView: View {
 
     private func remove(_ folder: String) {
         roots = folders.filter { $0 != folder }.joined(separator: "\n")
+    }
+}
+
+// MARK: - Schedule
+
+/// Reachable in one click from the sidebar footer, not buried in a settings sheet.
+struct SchedulePopover: View {
+    @EnvironmentObject var store: Store
+    @AppStorage("scheduleEnabled") private var enabled = false
+    @AppStorage("scheduleHour") private var hour = 9
+    @AppStorage("scheduleMinute") private var minute = 0
+    @AppStorage("scheduleDays") private var days = 0b1111111
+    @AppStorage("scheduleAgent") private var useAgent = false
+    @State private var note: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Space.m) {
+            HStack {
+                Text("Scheduled scan").font(TypeScale.title).foregroundStyle(Theme.text)
+                Spacer()
+                Toggle("", isOn: $enabled).toggleStyle(.switch).labelsHidden()
+                    .tint(Theme.accent)
+                    .pointerCursor()
+                    .onChange(of: enabled) { _ in apply() }
+            }
+
+            if enabled {
+                HStack(spacing: Space.m) {
+                    Text("Run at").font(TypeScale.body).foregroundStyle(Theme.secondary)
+                    TimeField(hour: $hour, minute: $minute)
+                        .onChange(of: hour) { _ in apply() }
+                        .onChange(of: minute) { _ in apply() }
+                    Spacer()
+                }
+
+                HStack(spacing: Space.xs + 1) {
+                    ForEach(0..<7, id: \.self) { dayChip($0) }
+                }
+
+                HStack(spacing: Space.xs + 1) {
+                    presetButton("Daily", 0b1111111)
+                    presetButton("Weekdays", 0b0111110)
+                    presetButton("Weekly", 1 << 1)
+                    Spacer()
+                }
+
+                Divider().overlay(Theme.hairline)
+
+                Toggle(isOn: $useAgent) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Run when the app is closed").font(TypeScale.strong)
+                            .foregroundStyle(Theme.text)
+                        Text("Installs a launchd agent, so the report is ready when you look.")
+                            .font(TypeScale.caption).foregroundStyle(Theme.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .pointerCursor()
+                .onChange(of: useAgent) { _ in apply() }
+
+                HStack(spacing: 5) {
+                    Image(systemName: "clock").font(.system(size: 10))
+                    Text(store.nextScanText.map { "Next run \($0)" } ?? ScanSchedule.summary)
+                        .font(TypeScale.caption)
+                }
+                .foregroundStyle(Theme.accent)
+
+                if let note {
+                    Text(note).font(TypeScale.caption).foregroundStyle(Band.p1.tint)
+                }
+            } else {
+                Text("Scans run only when you press Scan.")
+                    .font(TypeScale.body).foregroundStyle(Theme.tertiary)
+            }
+        }
+        .padding(Space.l + 2)
+        .frame(width: 330)
+        .background(VisualEffect(material: .popover).ignoresSafeArea())
+    }
+
+    private func dayChip(_ index: Int) -> some View {
+        let on = days & (1 << index) != 0
+        return Button {
+            let next = days ^ (1 << index)
+            if next != 0 { days = next; apply() }
+        } label: {
+            Text(ScanSchedule.dayNames[index].prefix(1))
+                .font(TypeScale.ui(10.5, .semibold))
+                .foregroundStyle(on ? Color.white : Theme.secondary)
+                .frame(width: 27, height: 25)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(on ? Theme.accent : Color.white.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+        .help(ScanSchedule.dayNames[index])
+    }
+
+    private func presetButton(_ title: String, _ mask: Int) -> some View {
+        Button { days = mask; apply() } label: {
+            Text(title).font(TypeScale.caption)
+                .foregroundStyle(days == mask ? Theme.accent : Theme.secondary)
+                .padding(.horizontal, Space.s + 1).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6)
+                    .fill(days == mask ? Theme.accent.opacity(0.15)
+                                       : Color.white.opacity(0.06)))
+        }
+        .buttonStyle(.plain)
+        .pointerCursor()
+    }
+
+    private func apply() {
+        store.scheduleAutoScan()
+        if enabled && useAgent {
+            note = Scheduler.installAgent()
+        } else {
+            Scheduler.removeAgent()
+            note = nil
+        }
     }
 }

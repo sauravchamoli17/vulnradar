@@ -18,7 +18,7 @@ whether action is genuinely needed. A full sweep of ~220 projects and ~15k packa
 | Stage | Question | Source |
 |-------|----------|--------|
 | **1 inventory** | What is installed here, and what depends on what? | 15 lockfile/manifest formats + the host layer (macOS, brew, runtimes, Docker images, GitHub Actions) |
-| **2 intel** | What was disclosed in the last N days? | [GitHub Global Advisory DB](https://github.com/advisories) (ecosystem-aware, exact version ranges) + [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (exploited in the wild) |
+| **2 intel** | What was disclosed recently, and what is known about everything else? | [GitHub Global Advisory DB](https://github.com/advisories) for the date window + [osv-scanner](https://github.com/google/osv-scanner) for the full advisory history (on by default) + [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) |
 | **3 match** | Does an installed version fall inside a vulnerable range? | version-range comparison across npm/PyPI/Maven/Go/RubyGems/crates/composer semantics |
 | **4 report** | What needs doing, in which repo, in what order? | P0–P3 bands, a per-project fix block, and a project-wise graph |
 
@@ -48,7 +48,7 @@ Use a 600000 ms (10 min) timeout. Common variations:
 ```bash
 bash "$RADAR" --roots ~/Desktop/Steady --days 7      # one tree, tighter window
 bash "$RADAR" --days 3 --severity "high critical"     # "what dropped this week that matters"
-bash "$RADAR" --deep                                  # add osv-scanner: every advisory ever, not just the window
+bash "$RADAR" --no-deep                               # skip osv-scanner, window only (faster)
 bash "$RADAR" --out /path/in/session/folder           # so the report opens in the app's file pane
 bash "$RADAR" --selftest                              # version-matching tests only
 ```
@@ -112,6 +112,20 @@ that is a compromise, not a patch. Follow the escalation steps in `steady-supply
 - Version comparison is one comparator across many ecosystems. It handles semver, PEP 440, Maven
   qualifiers and Go pseudo-versions; `--selftest` covers the cases that matter, and anything
   unparseable is skipped rather than guessed at.
+
+## Dependabot
+
+These advisories come from the GitHub Advisory Database, the same source Dependabot uses, so
+for a GitHub repo with alerts on there is real overlap. The report never hides a finding on
+that basis — it marks each project as 🔭 nothing watching it / ◐ on GitHub but Dependabot PRs
+off or unconfigured / ✓ likely duplicated, so the user can see where they are on their own.
+
+What Dependabot cannot cover at any setting: projects not on GitHub, the host layer (macOS,
+Homebrew, container images), the working tree rather than the default branch, blast radius
+across repos, and `MAL-*` malicious-package advisories. Detection resolves SSH aliases with
+`ssh -G`, so a remote like `git@work:org/repo` is still recognised as GitHub, and it reads
+`.github/dependabot.yml` for `open-pull-requests-limit: 0` and bare `dependency-name` ignores
+(which suppress security PRs too, unlike semver-scoped ones).
 
 ## Related
 

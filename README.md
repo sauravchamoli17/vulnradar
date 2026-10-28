@@ -66,7 +66,7 @@ It is also a plain CLI:
 bash scripts/radar.sh --days 14                    # everything in your home folder
 bash scripts/radar.sh --roots ~/code --days 7      # one tree, tighter window
 bash scripts/radar.sh --days 3 --severity "high critical"
-bash scripts/radar.sh --deep                       # full advisory history via osv-scanner
+bash scripts/radar.sh --no-deep                    # skip osv-scanner, advisory window only
 bash scripts/radar.sh --selftest                   # version-matching tests
 ```
 
@@ -93,7 +93,7 @@ crying wolf.
 | Stage | Question | Source |
 |-------|----------|--------|
 | **inventory** | What is installed here, and what depends on what? | 15 lockfile/manifest formats + the host layer (macOS, Homebrew, runtimes, Docker images, GitHub Actions) |
-| **intel** | What was disclosed in the last N days? | GitHub Global Advisory DB (ecosystem-aware, exact version ranges) + CISA KEV |
+| **intel** | What was disclosed recently, and everything else that is known? | GitHub Global Advisory DB for the window + osv-scanner for the full history + CISA KEV |
 | **match** | Does an installed version fall inside a vulnerable range? | one comparator across npm/PyPI/Maven/Go/RubyGems/crates/composer semantics |
 | **report** | What needs doing, and in what order? | P0–P3 bands, per-project fix blocks, an interactive graph |
 
@@ -112,11 +112,26 @@ package, versions, ranges, CVSS, KEV status, summaries, links — and asks a cod
 *decide whether the fix is warranted* before changing anything. It deliberately does not assume
 the scanner is right, because the scanner knows nothing about how your code uses the package.
 
+## Isn't this just Dependabot?
+
+Partly, and the report says so rather than pretending otherwise. The advisories come from the
+same database, so for a GitHub repo with Dependabot alerts on there is genuine overlap — each
+project is marked ✓ covered, ◐ partially, or 🔭 not watched at all. Nothing is hidden on the
+grounds that Dependabot might also report it.
+
+What Dependabot cannot reach whatever your settings: projects that are not on GitHub, the host
+layer (macOS, Homebrew, container images), what is installed in your working tree rather than
+on the default branch, blast radius across repos — Dependabot files one PR per repo and cannot
+say "one upgrade clears nine projects" — and `MAL-*` malicious-package advisories.
+
+They complement each other: Dependabot opens per-repo PRs continuously; this gives the
+machine-wide picture and covers the repos it cannot see.
+
 ## Limits
 
 - Advisory coverage is the GitHub Advisory DB. Vulnerabilities with no advisory for the
   ecosystem (OS packages beyond KEV name-matching, vendored code, binaries) are out of scope.
-- `--days N` is a disclosure window, not a full audit. Use `--deep` for full history.
+- `--days N` only drives the recency headline; osv-scanner covers full history by default.
 - Reachability is inferred from dependency type and commit recency, not from call graphs.
 - `bun.lockb` is binary and unreadable; the report names any it skipped.
 

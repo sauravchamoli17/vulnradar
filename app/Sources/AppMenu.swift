@@ -164,7 +164,14 @@ final class AppMenu: NSObject, NSMenuDelegate {
             let win = NSWindow(contentViewController: hosting)
             win.title = "Vulnerability Radar"
             win.setContentSize(NSSize(width: 1020, height: 660))
-            win.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            // Transparent, full-size titlebar: the sidebar material runs to the top of
+            // the window and the traffic lights sit on it, as in Finder and Mail.
+            win.styleMask = [.titled, .closable, .miniaturizable, .resizable,
+                             .fullSizeContentView]
+            win.titlebarAppearsTransparent = true
+            win.titleVisibility = .hidden
+            win.isMovableByWindowBackground = true
+            win.backgroundColor = .clear
             win.isReleasedWhenClosed = false
             win.center()
             window = win

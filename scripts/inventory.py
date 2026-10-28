@@ -571,6 +571,79 @@ def discover(roots, max_depth, skip_hidden=True):
     return {d: sorted({f for group in groups for f in group}) for d, groups in found.items()}
 
 
+_SSH_HOSTS = {}
+
+
+def resolve_ssh_host(alias):
+    """Remotes often use an SSH alias (git@work:org/repo); ask ssh what it really is."""
+    if alias in _SSH_HOSTS:
+        return _SSH_HOSTS[alias]
+    host = alias
+    try:
+        out = subprocess.run(["ssh", "-G", alias], capture_output=True, text=True, timeout=10)
+        for line in out.stdout.splitlines():
+            if line.startswith("hostname "):
+                host = line.split(None, 1)[1].strip()
+                break
+    except (OSError, subprocess.SubprocessError):
+        pass
+    _SSH_HOSTS[alias] = host
+    return host
+
+
+def github_slug(remote):
+    """owner/repo when the remote really points at GitHub, else None."""
+    if not remote:
+        return None
+    m = re.match(r"^(?:ssh://)?(?:git@|[\w.-]+@)([\w.-]+)[:/](.+?)(?:\.git)?/?$", remote)
+    if m:
+        host, path = resolve_ssh_host(m.group(1)), m.group(2)
+    else:
+        m = re.match(r"^https?://(?:[^@/]+@)?([\w.-]+)/(.+?)(?:\.git)?/?$", remote)
+        if not m:
+            return None
+        host, path = m.group(1), m.group(2)
+    if host.lower() != "github.com":
+        return None
+    parts = [p for p in path.split("/") if p]
+    return "/".join(parts[:2]) if len(parts) >= 2 else None
+
+
+def dependabot_config(directory):
+    """What .github/dependabot.yml says, without needing a YAML parser.
+
+    Only two things change whether an advisory reaches the user: version updates
+    turned off wholesale, and packages ignored by bare name (which also suppresses
+    security PRs, unlike a semver-scoped ignore).
+    """
+    path = Path(directory) / ".github" / "dependabot.yml"
+    if not path.is_file():
+        path = Path(directory) / ".github" / "dependabot.yaml"
+        if not path.is_file():
+            return None
+    text = read(path, limit=256 * 1024) or ""
+    ignored, pending = [], None
+    for raw in text.splitlines():
+        line = raw.split("#")[0].rstrip()
+        name = re.search(r"-?\s*dependency-name:\s*[\"']?([^\"'\s]+)", line)
+        if name:
+            if pending:
+                ignored.append(pending)
+            pending = name.group(1)
+            continue
+        if pending and re.search(r"update-types:", line):
+            pending = None
+    if pending:
+        ignored.append(pending)
+    return {
+        "present": True,
+        "version_updates_disabled": bool(
+            re.search(r"open-pull-requests-limit:\s*0\b", text)),
+        "ecosystems": sorted(set(re.findall(r"package-ecosystem:\s*[\"']?([\w-]+)", text))),
+        "ignored_outright": sorted(set(ignored)),
+    }
+
+
 def git_meta(directory):
     def run(args):
         try:
@@ -581,10 +654,12 @@ def git_meta(directory):
             return None
     if not run(["rev-parse", "--is-inside-work-tree"]):
         return {}
+    remote = run(["remote", "get-url", "origin"])
     return {
         "git_last_commit": run(["log", "-1", "--format=%cI"]),
         "git_branch": run(["rev-parse", "--abbrev-ref", "HEAD"]),
-        "git_remote": run(["remote", "get-url", "origin"]),
+        "git_remote": remote,
+        "github": github_slug(remote),
     }
 
 
@@ -680,7 +755,8 @@ def main():
         proj = graph.node(
             f"proj:{directory}", kind="project", name=path.name, path=directory,
             ecosystem="project", manifests=files, has_lockfile=bool(locks),
-            stale_days=days_since(meta.get("git_last_commit")), **meta,
+            stale_days=days_since(meta.get("git_last_commit")),
+            dependabot=dependabot_config(directory), **meta,
         )
         graph.edge(host, proj, "contains")
         has_lock = any(f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",

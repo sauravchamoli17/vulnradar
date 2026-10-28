@@ -90,6 +90,42 @@ def group_findings(findings):
     return rows
 
 
+def project_nodes(graph):
+    return {n["path"]: n for n in graph.get("nodes", []) if n.get("kind") == "project"}
+
+
+def coverage(node):
+    """Would anything else have told the user about this?
+
+    Dependabot draws on the same GitHub Advisory Database, so for a GitHub repo with
+    alerts on it is largely duplicate. The point of saying so is to direct attention
+    at the projects nothing else is watching.
+    """
+    if not node:
+        return ("unknown", "Project metadata unavailable.")
+    slug = node.get("github")
+    config = node.get("dependabot") or {}
+    if not slug:
+        if not node.get("git_remote"):
+            return ("alone", "Not a git repo — nothing else is watching this.")
+        return ("alone", "Remote is not GitHub — Dependabot does not apply here.")
+    if not config.get("present"):
+        return ("partial",
+                f"On GitHub ({slug}) with no dependabot.yml. Dependabot alerts may still "
+                "be on at the repo or org level; its PRs are not configured here.")
+    if config.get("version_updates_disabled"):
+        return ("partial",
+                f"On GitHub ({slug}). dependabot.yml sets open-pull-requests-limit: 0, so "
+                "it raises no version-update PRs. Security updates depend on the repo's "
+                "Dependabot alerts setting, which this scan cannot read.")
+    ignored = config.get("ignored_outright") or []
+    note = f"On GitHub ({slug}) with Dependabot configured — it likely reports these too."
+    if ignored:
+        note += (" Ignored outright (which also suppresses security PRs): "
+                 + ", ".join(f"`{i}`" for i in ignored[:5]) + ".")
+    return ("covered", note)
+
+
 def by_project(rows):
     """Flip the package-centric rows into the per-repo view: what do I fix in here?"""
     projects = {}
@@ -126,7 +162,7 @@ def project_fix_block(entry, home, limit=12):
     return lines
 
 
-def render_markdown(data, rows, projects, home):
+def render_markdown(data, rows, projects, home, nodes):
     intel = data.get("intel", {})
     stats = data.get("graph_stats", {})
     counts = data.get("counts", {})
@@ -175,6 +211,64 @@ def render_markdown(data, rows, projects, home):
               f"{age} |")
         w("")
 
+    buckets = {"alone": [], "partial": [], "covered": [], "unknown": []}
+    for entry in projects:
+        buckets[coverage(nodes.get(entry["path"]))[0]].append(entry)
+    w("## Dependabot overlap")
+    w("")
+    total = len(projects)
+    covered = len(buckets["covered"])
+    uncovered = len(buckets["alone"]) + len(buckets["partial"])
+    w("These advisories come from the GitHub Advisory Database, the same source "
+      "Dependabot uses. Nothing below is hidden on the grounds that Dependabot might "
+      "also report it — this only marks which projects something else is watching, so "
+      "you know where you are on your own.")
+    w("")
+    if covered == 0:
+        w(f"**Nothing here is currently being reported by Dependabot.** All {total} "
+          "affected project(s) either sit outside GitHub or have Dependabot PRs "
+          "switched off or unconfigured, so this scan is the only thing surfacing them.")
+    elif uncovered == 0:
+        w(f"**All {total} affected project(s) look covered by Dependabot**, so treat "
+          "this as a second opinion and a machine-wide roll-up rather than news.")
+    else:
+        w(f"**{uncovered} of {total} affected project(s) are not covered**, and "
+          f"{covered} look duplicated by Dependabot.")
+    w("")
+    w("| | Projects | What it means |")
+    w("|---|---|---|")
+    w(f"| 🔭 | {len(buckets['alone'])} | Not on GitHub, or not a git repo — nothing "
+      "else is watching |")
+    w(f"| ◐ | {len(buckets['partial'])} | On GitHub, but Dependabot PRs are off or "
+      "unconfigured |")
+    w(f"| ✓ | {len(buckets['covered'])} | Dependabot likely reports these too |")
+    w("")
+    leads_n = len(data.get("leads") or [])
+    shared = [r for r in rows if len(r["projects"]) > 1]
+    w("Outside Dependabot's reach regardless of settings:")
+    w("")
+    if leads_n:
+        w(f"- **{leads_n} host-layer lead(s)** — macOS, Homebrew, container images")
+    if shared:
+        w(f"- **{len(shared)} package(s) shared across projects** — Dependabot files "
+          "per repo, so it cannot tell you one upgrade clears several")
+    w("- **Your working tree** — Dependabot reads the default branch; this reads what "
+      "is installed on disk, so uncommitted or stale checkouts show up here only")
+    w("- **Malicious packages** (`MAL-*` from osv-scanner) — supply-chain compromise, "
+      "not an ordinary CVE")
+    w("")
+    missing = [e for e in buckets["partial"]
+               if not ((nodes.get(e["path"]) or {}).get("dependabot") or {}).get("present")]
+    if missing:
+        w(f"No `dependabot.yml` at all in {len(missing)} affected project(s): "
+          + ", ".join(f"`{e['name']}`" for e in missing[:8])
+          + (" …" if len(missing) > 8 else ""))
+        w("")
+    w("The two work best together: let Dependabot open per-repo PRs continuously, and "
+      "use this for the machine-wide picture, the host layer, and the repos it cannot "
+      "see.")
+    w("")
+
     w("## By project")
     w("")
     for entry in projects:
@@ -192,6 +286,10 @@ def render_markdown(data, rows, projects, home):
         w("")
         w(f"`{entry['band']}` · {len(entry['items'])} affected package(s)"
           + (" · " + " · ".join(flags) if flags else ""))
+        w("")
+        kind, note = coverage(nodes.get(entry["path"]))
+        mark = {"alone": "🔭", "partial": "◐", "covered": "✓"}.get(kind, "·")
+        w(f"{mark} {note}")
         w("")
         w("| | Package | Installed | Upgrade to | How it is pulled in | Advisories |")
         w("|---|---|---|---|---|---|")
@@ -477,9 +575,9 @@ __D3__
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #17181a; --panel: #1f2123; --ink: #ecebe8; --muted: #9b9b97;
-      --line: #32353a; --p0: #ff6b5e; --p1: #ffa44a; --p2: #e3c457; --p3: #8fa3ad;
-      --proj: #79a6ff; --clean: #4a4d52;
+      --bg: #1B1D23; --panel: #23262E; --ink: #F6F7FA; --muted: #8B92A2;
+      --line: #2A2E36; --p0: #E2555F; --p1: #E0883C; --p2: #A89446; --p3: #6E7D8F;
+      --proj: #7C82F0; --clean: #474C57;
     }
   }
   * { box-sizing: border-box; }
@@ -493,7 +591,7 @@ __D3__
   #canvas { flex: 1; min-height: 460px; position: relative; overflow: hidden; }
   aside { width: 300px; border-right: 1px solid var(--line); background: var(--panel);
     overflow-y: auto; padding: 12px; }
-  @media (max-width: 900px) { aside { width: auto; border-right: 0;
+  @media (max-width: 900px) { aside:not(.drawer) { width: auto; border-right: 0;
     border-bottom: 1px solid var(--line); max-height: 260px; } }
   .ptitle { font-size: 11px; text-transform: uppercase; letter-spacing: .08em;
     color: var(--muted); margin: 6px 4px 8px; }
@@ -518,19 +616,18 @@ __D3__
   .lbl { font-size: 11px; fill: var(--muted); pointer-events: none;
     text-anchor: middle; font-weight: 600; }
   .lbl.hot { fill: var(--ink); }
-  svg { width: 100%; height: 100%; display: block; }
+  svg { display: block; }
   .link { stroke: var(--line); }
   .legend { display: flex; gap: 12px; flex-wrap: wrap; padding: 7px 20px;
     border-top: 1px solid var(--line); font-size: 12px; color: var(--muted);
     align-items: center; }
   .legend i { margin-right: 4px; }
-  .drawer { position: absolute; top: 0; right: 0; bottom: 0; width: 370px;
+  .drawer { display: none; flex: 0 0 340px; width: 340px; position: relative;
+    align-self: stretch; height: 100%; box-sizing: border-box;
     background: var(--panel); border-left: 1px solid var(--line); overflow-y: auto;
-    padding: 16px 18px 24px; transform: translateX(104%);
-    transition: transform .22s cubic-bezier(.4,0,.2,1); box-shadow: -14px 0 40px rgba(0,0,0,.28);
-    z-index: 8; }
-  .drawer.open { transform: translateX(0); }
-  @media (max-width: 900px) { .drawer { width: 100%; } }
+    padding: 16px 18px 24px; }
+  .drawer.open { display: block; }
+  @media (max-width: 620px) { .drawer { flex-basis: 100%; width: 100%; } }
   .drawer h2 { margin: 0 0 2px; font-size: 16px; letter-spacing: -0.01em; }
   .drawer .close { position: absolute; top: 12px; right: 14px; border: 0; background: none;
     color: var(--muted); font-size: 17px; cursor: pointer; padding: 2px 6px; }
@@ -560,6 +657,27 @@ __D3__
     word-break: break-all; }
   .fix button { margin-top: 8px; }
   .hint { font-size: 11.5px; color: var(--muted); margin-top: 10px; }
+
+  /* Embedded in the app: it already has a title bar, a project list and a legend,
+     so the page shows only the canvas and its controls. The app is dark regardless of
+     the system setting, so pin the dark tokens rather than following prefers-color-scheme. */
+  html[data-embed] {
+    --bg: #1B1D23; --panel: #23262E; --ink: #F6F7FA; --muted: #8B92A2;
+    --line: #2A2E36; --p0: #E2555F; --p1: #E0883C; --p2: #A89446; --p3: #6E7D8F;
+    --proj: #7C82F0; --clean: #474C57;
+  }
+  html[data-embed] body { background: #1B1D23; }
+  html[data-embed] header,
+  html[data-embed] aside:not(.drawer),
+  html[data-embed] .legend { display: none !important; }
+  /* The embedded pane is narrow but it is not a phone: keep the side-by-side layout
+     and a drawer that leaves the graph visible. */
+  html[data-embed] .wrap { flex-direction: row; height: calc(100vh - 41px); }
+  html[data-embed] .drawer {
+    flex: 0 0 min(330px, 48%); width: min(330px, 48%);
+    height: calc(100vh - 41px);
+  }
+  html[data-embed] .controls { border-top: 0; padding: 8px 14px; }
 </style>
 </head>
 <body>
@@ -580,8 +698,8 @@ __D3__
   </aside>
   <div id="canvas">
     <div class="tip" id="tip"></div>
-    <aside class="drawer" id="drawer" aria-live="polite"></aside>
   </div>
+  <aside class="drawer" id="drawer" aria-live="polite"></aside>
 </div>
 <div class="legend">
   <span><i class="dot" style="background:var(--p0);display:inline-block"></i>P0</span>
@@ -647,8 +765,13 @@ function render() {
   const nodes = DATA.nodes.filter(n => ids.has(n.cluster) &&
     (mode === 'all' || n.kind === 'project' || n.band));
   const keep = new Set(nodes.map(n => n.id));
-  const links = DATA.edges.filter(e =>
-    keep.has(e.source.id || e.source) && keep.has(e.target.id || e.target));
+  // Rebuild links by id on every render. d3 rewrites source/target into node objects,
+  // and reusing those across a changed node set resolves to stale nodes, which leaves
+  // the survivors with NaN positions and nothing drawn.
+  const links = DATA.edges
+    .map(e => ({ source: e.source.id || e.source,
+                 target: e.target.id || e.target, rel: e.rel }))
+    .filter(e => keep.has(e.source) && keep.has(e.target));
 
   document.getElementById('shown').textContent =
     active.length + ' project(s) · ' + (nodes.length - active.length) + ' package nodes' +
@@ -688,12 +811,15 @@ function render() {
       })
     .merge(node).attr('fill', fill).attr('r', radius);
 
-  const label = labelLayer.selectAll('text').data(active, d => d.id);
+  const solo = active.length === 1;
+  const labelled = solo ? [] : active;
+  const label = labelLayer.selectAll('text').data(labelled, d => d.id);
   label.exit().remove();
   label.enter().append('text').attr('class', d => 'lbl' + (d.band === 'P0' ? ' hot' : ''))
       .text(d => d.name + (d.affected ? ' (' + d.affected + ')' : ''))
     .merge(label)
-      .attr('x', d => d.cx).attr('y', d => d.cy - 72);
+      .attr('x', d => d.cx)
+      .attr('y', d => d.cy - 72 - Math.sqrt(d.total || 1) * 4);
 
   sim.nodes(nodes);
   sim.force('link').links(links);
@@ -715,7 +841,21 @@ function esc(s) {
 const SEV_COLOR = { critical: 'var(--p0)', high: 'var(--p1)', medium: 'var(--p2)' };
 const drawer = document.getElementById('drawer');
 
-function closeDrawer() { drawer.classList.remove('open'); }
+function closeDrawer() {
+  drawer.classList.remove('open');
+  relayout();
+}
+
+/// Docking the drawer resizes the canvas, so the viewBox and zoom must follow it.
+function relayout() {
+  // Two frames: the first lets the flex layout settle after the drawer docks or
+  // undocks, the second measures the canvas at its final size.
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    resize();
+    render();
+    fit();
+  }));
+}
 
 function showDetail(d) {
   const cluster = clusterById.get(d.cluster);
@@ -763,6 +903,7 @@ function showDetail(d) {
               : ' <span style="color:var(--muted)">&rarr; no fix published</span>') + '</div>' +
     '<div class="chips">' + chips.join('') + '</div>' + body + fix;
   drawer.classList.add('open');
+  relayout();
 
   document.getElementById('drawerclose').onclick = closeDrawer;
   const copy = document.getElementById('copyfix');
@@ -850,24 +991,52 @@ function drawList() {
   });
 }
 
-function select(id) { focus = id; render(); fit(); }
+function select(id) {
+  focus = id;
+  // A focused cluster lays out at the origin. Without reseeding, its nodes keep the
+  // coordinates they had in the full grid and fly in from off-screen, so the view
+  // looks empty for a second after every selection.
+  if (id) {
+    DATA.nodes.forEach(n => {
+      if (n.cluster === id) {
+        n.x = (Math.random() - 0.5) * 60;
+        n.y = (Math.random() - 0.5) * 60;
+        n.vx = 0;
+        n.vy = 0;
+      }
+    });
+  }
+  render();
+  fit();
+}
 
 function fit() {
   const active = visibleClusters();
   if (!active.length) return;
-  const pad = 150;
+  // A single focused cluster occupies far less than a grid cell, so it needs a
+  // tighter pad and a higher zoom ceiling or it renders as a speck.
+  const solo = active.length === 1;
+  const pad = solo ? 80 : 150;
   const xs = active.map(c => c.cx), ys = active.map(c => c.cy);
   const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
   const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
   const box = document.getElementById('canvas').getBoundingClientRect();
-  const k = Math.min(box.width / (maxX - minX), box.height / (maxY - minY), 1.6);
+  const k = Math.min(box.width / (maxX - minX), box.height / (maxY - minY),
+                     solo ? 3.0 : 1.6);
   svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity.scale(k)
     .translate(-(minX + maxX) / 2, -(minY + maxY) / 2));
 }
 
 function resize() {
   const box = document.getElementById('canvas').getBoundingClientRect();
-  svg.attr('viewBox', [-box.width / 2, -box.height / 2, box.width, box.height]);
+  const w = Math.max(1, Math.round(box.width));
+  const h = Math.max(1, Math.round(box.height));
+  // Set width/height as attributes rather than leaning on width:100%. Docking the
+  // drawer resizes this flex container, and a percentage-sized SVG lets WebKit keep
+  // the old compositing tile, which paints a clipped ghost of the previous layout
+  // beside the live one. An explicit box makes the resize a real layout change.
+  svg.attr('width', w).attr('height', h)
+     .attr('viewBox', [-w / 2, -h / 2, w, h]);
 }
 window.addEventListener('resize', resize);
 
@@ -929,7 +1098,8 @@ def main():
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
-    (outdir / "report.md").write_text(render_markdown(data, rows, projects, home),
+    (outdir / "report.md").write_text(
+        render_markdown(data, rows, projects, home, project_nodes(graph)),
                                       encoding="utf-8")
     (outdir / "graph.html").write_text(
         render_html(data, rows, leads, graph, args.title, home), encoding="utf-8")
