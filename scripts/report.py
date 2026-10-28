@@ -819,6 +819,7 @@ const DATA = __DATA__;
 const COLOR = { P0: 'var(--p0)', P1: 'var(--p1)', P2: 'var(--p2)', P3: 'var(--p3)' };
 const clusterById = new Map(DATA.clusters.map(c => [c.id, c]));
 let mode = 'affected', focus = null;
+let frames = 0, stalled = false;
 
 const fill = n => n.kind === 'project' ? 'var(--proj)'
   : n.band ? COLOR[n.band] : 'var(--clean)';
@@ -846,7 +847,10 @@ function home(d) {
 }
 
 function layout(active) {
-  const cols = Math.max(1, Math.ceil(Math.sqrt(active.length * 1.6)));
+  // Never more columns than there are clusters: ceil(sqrt(1 * 1.6)) is 2, which puts a
+  // single focused cluster in the left column of a two-column grid — 115px off centre,
+  // and a third of the pane away once the focus zoom multiplies it.
+  const cols = Math.min(active.length, Math.max(1, Math.ceil(Math.sqrt(active.length * 1.6))));
   const gapX = 230, gapY = 210;
   const rows = Math.ceil(active.length / cols);
   active.forEach((c, i) => {
@@ -927,14 +931,43 @@ function render() {
 
   sim.nodes(nodes);
   sim.force('link').links(links);
+  sim.on('tick', draw);
   sim.alpha(.9).restart();
-  sim.on('tick', () => {
-    linkLayer.selectAll('line')
-      .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
-      .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
-    nodeLayer.selectAll('circle').attr('cx', d => d.x).attr('cy', d => d.y);
-  });
+  // Draw once up front rather than waiting for the first frame: a node with no cx/cy
+  // sits at the origin, so without this the whole graph is a single dot until the
+  // simulation runs — and it may never run, see settle().
+  draw();
+  if (document.hidden) {
+    settle();
+  } else {
+    const drawn = frames;
+    setTimeout(() => { if (frames === drawn) settle(); }, 500);
+  }
   drawList();
+}
+
+function draw() {
+  frames++;
+  linkLayer.selectAll('line')
+    .attr('x1', d => d.source.x).attr('y1', d => d.source.y)
+    .attr('x2', d => d.target.x).attr('y2', d => d.target.y);
+  nodeLayer.selectAll('circle').attr('cx', d => d.x).attr('cy', d => d.y);
+}
+
+/// Lay the graph out without animation frames.
+///
+/// WebKit stops serving requestAnimationFrame to a view it considers off screen, and d3
+/// drives both the force simulation and the zoom transition from it. Embedded in the app
+/// the page routinely loads into a view that is not on screen yet, and then nothing fails
+/// — no error, no exception — the nodes simply never receive coordinates and the pane
+/// looks empty. Run the simulation to rest by hand instead and paint the result.
+function settle() {
+  stalled = true;
+  sim.alpha(Math.max(sim.alpha(), .9));
+  for (let i = 0; i < 300; i++) sim.tick();
+  sim.stop();
+  draw();
+  fit();
 }
 
 function esc(s) {
@@ -1155,8 +1188,11 @@ function fit() {
 
   const k = Math.min(box.width / (maxX - minX), box.height / (maxY - minY),
                      solo ? 3.0 : 1.6);
-  svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity.scale(k)
-    .translate(-(minX + maxX) / 2, -(minY + maxY) / 2));
+  const to = d3.zoomIdentity.scale(k).translate(-(minX + maxX) / 2, -(minY + maxY) / 2);
+  // A transition is frame-driven like the simulation: with no frames it never starts and
+  // the view keeps the identity transform, which is its own kind of blank pane.
+  if (stalled || document.hidden) svg.call(zoom.transform, to);
+  else svg.transition().duration(400).call(zoom.transform, to);
 }
 
 function resize() {
@@ -1171,6 +1207,8 @@ function resize() {
      .attr('viewBox', [-w / 2, -h / 2, w, h]);
 }
 window.addEventListener('resize', resize);
+// Coming back on screen restores animation frames, so the next render can animate again.
+document.addEventListener('visibilitychange', () => { if (!document.hidden) stalled = false; });
 
 document.getElementById('t-aff').onclick = () => setMode('affected');
 document.getElementById('t-all').onclick = () => setMode('all');
