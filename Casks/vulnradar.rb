@@ -9,6 +9,8 @@ cask "vulnradar" do
   desc "Tells you which of your projects the latest CVEs actually affect"
   homepage "https://github.com/sauravchamoli17/vulnradar"
 
+  depends_on :macos
+
   app "VulnRadar.app"
 
   # The build is ad-hoc signed, so strip the quarantine flag on install.
@@ -19,8 +21,8 @@ cask "vulnradar" do
   end
 
   zap trash: [
-    "~/Library/Preferences/dev.local.vulnradar.plist",
-    "~/Library/LaunchAgents/dev.local.vulnradar.scan.plist",
     "~/.claude/vuln-radar",
+    "~/Library/LaunchAgents/dev.local.vulnradar.scan.plist",
+    "~/Library/Preferences/dev.local.vulnradar.plist",
   ]
 end

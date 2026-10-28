@@ -22,8 +22,13 @@ about 20 seconds.
 ## Install
 
 ```bash
+brew tap sauravchamoli17/tap
+brew trust --cask sauravchamoli17/tap/vulnradar
 brew install --cask sauravchamoli17/tap/vulnradar
 ```
+
+Homebrew 6 refuses to load a cask from a third-party tap until you trust it, so the
+middle step is not optional.
 
 Or grab `VulnRadar.dmg` from [Releases](../../releases). The build is ad-hoc signed, not
 notarised, so macOS blocks the first launch — right-click → **Open**, or
