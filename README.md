@@ -3,8 +3,6 @@
 A macOS menu bar app and CLI that answers one question: **of the vulnerabilities disclosed
 recently, which ones actually touch code on my machine, and what do I do about them?**
 
-![The project list, ranked by whether you have to act](docs/screenshot.png)
-
 Most scanners answer "does this repo have CVEs" one repo at a time. This starts from the
 advisory feed, builds a dependency graph of every project you have, and tells you which of
 your projects a new advisory lands in. A sweep of ~220 projects and ~15,000 packages takes
@@ -39,8 +37,6 @@ nothing else — no project file, no package manager, no dependencies.
 The app sits in the menu bar and badges the number of findings that need action now. Open it
 for the project list, per-project fix commands, a **Fix with AI** prompt carrying the advisory
 evidence, and a graph where every project is a cluster coloured by its worst finding.
-
-![One cluster per project, coloured by worst finding](docs/graph.png)
 
 Settings picks the folders to scan and the folders to skip — old clients and archives you
 no longer work on, excluded whichever scope you chose. Scans can run on a clock ("every
