@@ -179,6 +179,7 @@ def match_advisories(index, intel, kev_by_cve):
                         "stale_days": project.get("stale_days"),
                         "fix": fix_command(eco, project, affected["name"], affected.get("fixed")),
                         "dependabot": dependabot_state(coverage, project, affected["name"]),
+                        "build": project.get("build_policy"),
                     })
                 findings.append({
                     "type": "finding",
@@ -319,7 +320,8 @@ def ingest_osv(path, index, coverage=None):
                                    "rel": edge["rel"], "direct": bool(edge.get("direct")),
                                    "stale_days": project.get("stale_days"),
                                    "fix": fix_command(eco, project, name, fixed),
-                                   "dependabot": dependabot_state(coverage, project, name)}
+                                   "dependabot": dependabot_state(coverage, project, name),
+                                   "build": project.get("build_policy")}
                                   for project, edge in consumers]
                                  or [{"path": source, "name": Path(source).parent.name,
                                       "rel": "depends_on", "direct": False,
@@ -346,6 +348,25 @@ def code_alerts(index):
                 "why": risky["why"],
             })
     return out
+
+
+def install_exposure(index):
+    """Which projects can actually execute dependency code at install time."""
+    blocked, running = [], []
+    for node in index.nodes.values():
+        if node.get("kind") != "project":
+            continue
+        policy = node.get("build_policy")
+        if not policy:
+            continue
+        row = {"path": node.get("path"), "name": node.get("name"),
+               "manager": policy.get("manager"), "why": policy.get("why"),
+               "allowed": policy.get("allowed") or [],
+               "packages": node.get("install_script_packages") or []}
+        (blocked if policy.get("blocked") else running).append(row)
+    blocked.sort(key=lambda r: r["name"] or "")
+    running.sort(key=lambda r: -len(r["packages"]))
+    return {"blocked": blocked, "running": running}
 
 
 def install_script_summary(index):
@@ -431,6 +452,7 @@ def main():
         "alerts": alerts,
         "malware": malware,
         "install_scripts": install_script_summary(index),
+        "install_exposure": install_exposure(index),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -445,9 +467,11 @@ def main():
             print(f"!! MALICIOUS PACKAGES: {len(malware)} MAL-* advisory match(es)")
         if alerts:
             print(f"!! suspicious lifecycle scripts: {len(alerts)}")
+        exposure = install_exposure(index)
         if not malware and not alerts:
-            print(f"malicious-code check: clean "
-                  f"({len(installs)} dependency install script(s) present)")
+            print(f"malicious-code check: clean — {len(exposure['blocked'])} project(s) "
+                  f"block install scripts, {len(exposure['running'])} allow them "
+                  f"({len(installs)} dependency script(s))")
         if previous:
             print(f"new since last run: {sum(1 for f in findings if f['new'])}")
     return 0

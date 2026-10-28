@@ -158,6 +158,45 @@ LIFECYCLE_HOOKS = {"preinstall", "install", "postinstall", "prepare", "prepublis
                    "preprepare", "postprepare"}
 
 
+def build_policy(directory, files):
+    """Can a dependency execute code at install time here, and which ones?
+
+    This matters more than a raw list: pnpm 10 blocks dependency build scripts unless
+    they are allowlisted, and npm honours ignore-scripts, so a project can be immune
+    to install-time payloads regardless of what its dependencies declare.
+    """
+    path = Path(directory)
+    npmrc = read(path / ".npmrc", limit=64 * 1024) or ""
+    if re.search(r"^\s*ignore-scripts\s*=\s*true", npmrc, re.M | re.I):
+        return {"blocked": True, "manager": "npm",
+                "why": "ignore-scripts=true in .npmrc"}
+
+    manifest = load_json(path / "package.json") if "package.json" in files else None
+    manifest = manifest if isinstance(manifest, dict) else {}
+
+    if "pnpm-lock.yaml" in files:
+        m = re.match(r"pnpm@(\d+)", str(manifest.get("packageManager") or ""))
+        major = int(m.group(1)) if m else None
+        allowed = ((manifest.get("pnpm") or {}).get("onlyBuiltDependencies")) or []
+        if major and major >= 10:
+            if allowed:
+                return {"blocked": False, "manager": f"pnpm {major}",
+                        "allowed": sorted(allowed),
+                        "why": f"pnpm {major} runs install scripts only for the "
+                               "allowlisted packages"}
+            return {"blocked": True, "manager": f"pnpm {major}",
+                    "why": f"pnpm {major} blocks dependency install scripts unless "
+                           "allowlisted, and this project has no allowlist"}
+        return {"blocked": False, "manager": f"pnpm {major or '<10'}",
+                "why": "install scripts run; this lockfile format does not record "
+                       "which packages have them"}
+
+    if "package-lock.json" in files or "npm-shrinkwrap.json" in files:
+        return {"blocked": False, "manager": "npm",
+                "why": "npm runs dependency install scripts by default"}
+    return None
+
+
 def scan_scripts(manifest):
     """Lifecycle hooks are where supply-chain payloads fire; read them, judge narrowly."""
     scripts = manifest.get("scripts")
@@ -230,6 +269,7 @@ def parse_pnpm_lock(path, graph, proj):
         return 0
     count = 0
     section = None
+    current = None
     for line in text.splitlines():
         if re.match(r"^[a-zA-Z]", line):
             section = line.split(":")[0]
@@ -241,7 +281,15 @@ def parse_pnpm_lock(path, graph, proj):
             nid = graph.pkg("npm", m.group(2), m.group(3))
             if nid:
                 graph.edge(proj, nid, "depends_on")
+                current = f"{m.group(2)}@{m.group(3)}"
                 count += 1
+            continue
+        # pnpm < 9 recorded this; pnpm 9+ dropped it and gates builds by policy instead.
+        if current and re.match(r"\s+requiresBuild:\s*true", line):
+            graph.nodes[proj].setdefault("install_script_packages", [])
+            if current not in graph.nodes[proj]["install_script_packages"]:
+                graph.nodes[proj]["install_script_packages"].append(current)
+            current = None
     return count
 
 
@@ -803,7 +851,8 @@ def main():
             f"proj:{directory}", kind="project", name=path.name, path=directory,
             ecosystem="project", manifests=files, has_lockfile=bool(locks),
             stale_days=days_since(meta.get("git_last_commit")),
-            dependabot=dependabot_config(directory), **meta,
+            dependabot=dependabot_config(directory),
+            build_policy=build_policy(directory, files), **meta,
         )
         graph.edge(host, proj, "contains")
         has_lock = any(f in ("package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lock",

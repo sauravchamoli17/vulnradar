@@ -229,10 +229,38 @@ def render_markdown(data, rows, projects, home, nodes):
             w(f"  ```")
         w("")
     if not malware and not alerts:
-        w("No known-malicious packages (`MAL-*`) and no suspicious lifecycle scripts "
-          f"in your own manifests. {len(installs)} dependency(ies) run install scripts, "
-          "which is normal but is where supply-chain payloads fire.")
+        w("No known-malicious packages (`MAL-*`) and no suspicious lifecycle scripts in "
+          "your own manifests.")
         w("")
+
+    exposure = data.get("install_exposure") or {}
+    blocked, running = exposure.get("blocked") or [], exposure.get("running") or []
+    if blocked or running:
+        w("### Install-time execution")
+        w("")
+        w("Install scripts are where supply-chain payloads fire, so what matters is "
+          "whether a dependency can run code here at all.")
+        w("")
+        if blocked:
+            reasons = {}
+            for row in blocked:
+                reasons.setdefault(row["why"], []).append(row["name"])
+            w(f"**{len(blocked)} project(s) block it:**")
+            w("")
+            for why, names in sorted(reasons.items(), key=lambda kv: -len(kv[1])):
+                w(f"- {len(names)} × {why}")
+            w("")
+        if running:
+            exposed = [r for r in running if r["packages"]]
+            w(f"**{len(running)} project(s) allow it**"
+              + (f", {len(exposed)} with dependencies that actually have install scripts:"
+                 if exposed else ", none of which have dependencies with install scripts."))
+            w("")
+            for row in exposed[:12]:
+                w(f"- `{row['name']}` ({row['manager']}) — "
+                  + ", ".join(f"`{p}`" for p in row["packages"][:5])
+                  + (" …" if len(row["packages"]) > 5 else ""))
+            w("")
 
     if not rows and not leads:
         w("## No action needed")
@@ -561,6 +589,7 @@ def build_render_graph(graph, rows, leads, home):
             "affected": len(bands),
             "total": len(members),
             "stale": project.get("stale_days"),
+            "github": project.get("github"),
         })
     clusters.sort(key=lambda c: (ORDER.get(c["band"], 9), -c["affected"], c["name"]))
     for cluster in clusters:
@@ -931,6 +960,12 @@ function showDetail(d) {
   }).join('') : '<div class="hint">No advisory matched this package — it is shown for ' +
     'context as part of this dependency set.</div>';
 
+  const gh = cluster && cluster.github;
+  const watch = d.kind === 'project' ? '' : (gh
+    ? '<div class="hint">&#8599; Dependabot will flag and raise this itself if it is ' +
+      'turned on for ' + esc(gh) + '.</div>'
+    : '<div class="hint">Not a GitHub repo &mdash; nothing else will raise this.</div>');
+
   const fix = d.fix
     ? '<div class="fix"><div class="chip" style="border:0;padding-left:0">Fix</div>' +
       '<code>cd ' + esc(cluster ? cluster.path : '') + '\n' + esc(d.fix) + '</code>' +
@@ -943,7 +978,7 @@ function showDetail(d) {
     '<div class="jump">' + esc(d.version || '') +
     (d.target ? ' &rarr; <span class="to">' + esc(d.target) + '</span>'
               : ' <span style="color:var(--muted)">&rarr; no fix published</span>') + '</div>' +
-    '<div class="chips">' + chips.join('') + '</div>' + body + fix;
+    '<div class="chips">' + chips.join('') + '</div>' + watch + body + fix;
   drawer.classList.add('open');
   relayout();
 
@@ -1055,14 +1090,28 @@ function select(id) {
 function fit() {
   const active = visibleClusters();
   if (!active.length) return;
-  // A single focused cluster occupies far less than a grid cell, so it needs a
-  // tighter pad and a higher zoom ceiling or it renders as a speck.
   const solo = active.length === 1;
-  const pad = solo ? 80 : 150;
-  const xs = active.map(c => c.cx), ys = active.map(c => c.cy);
-  const minX = Math.min(...xs) - pad, maxX = Math.max(...xs) + pad;
-  const minY = Math.min(...ys) - pad, maxY = Math.max(...ys) + pad;
   const box = document.getElementById('canvas').getBoundingClientRect();
+  let minX, maxX, minY, maxY;
+
+  // One focused cluster can hold 5 nodes or 50, so measure where the nodes actually
+  // are rather than assuming a radius. Falls back to the centroid before the first tick.
+  const pts = solo ? sim.nodes().filter(n => isFinite(n.x) && isFinite(n.y)) : [];
+  if (pts.length > 1) {
+    const pad = 55;
+    minX = Math.min.apply(null, pts.map(n => n.x)) - pad;
+    maxX = Math.max.apply(null, pts.map(n => n.x)) + pad;
+    minY = Math.min.apply(null, pts.map(n => n.y)) - pad;
+    maxY = Math.max.apply(null, pts.map(n => n.y)) + pad;
+  } else {
+    const pad = solo ? 90 : 150;
+    const xs = active.map(c => c.cx), ys = active.map(c => c.cy);
+    minX = Math.min.apply(null, xs) - pad;
+    maxX = Math.max.apply(null, xs) + pad;
+    minY = Math.min.apply(null, ys) - pad;
+    maxY = Math.max.apply(null, ys) + pad;
+  }
+
   const k = Math.min(box.width / (maxX - minX), box.height / (maxY - minY),
                      solo ? 3.0 : 1.6);
   svg.transition().duration(400).call(zoom.transform, d3.zoomIdentity.scale(k)
@@ -1093,6 +1142,8 @@ function setMode(m) {
   render();
   fit();
 }
+
+sim.on('end', () => { if (visibleClusters().length === 1) fit(); });
 
 resize();
 render();
