@@ -43,11 +43,14 @@ class Index:
     def __init__(self, graph):
         self.nodes = {n["id"]: n for n in graph["nodes"]}
         self.by_pkg = {}
+        self.projects_by_path = {}
         self.edges_to = {}
         for node in graph["nodes"]:
             if node["kind"] == "package":
                 key = (node["ecosystem"], norm_name(node["ecosystem"], node["name"]))
                 self.by_pkg.setdefault(key, []).append(node)
+            elif node["kind"] == "project" and node.get("path"):
+                self.projects_by_path[node["path"]] = node
         for edge in graph["edges"]:
             self.edges_to.setdefault(edge["target"], []).append(edge)
 
@@ -59,6 +62,21 @@ class Index:
             if project and project["kind"] == "project":
                 out.append((project, edge))
         return out
+
+    def project_at(self, path):
+        return self.projects_by_path.get(path)
+
+    def package_node(self, ecosystem, name, version):
+        """The graph node for a package osv-scanner reported, or None.
+
+        The ids do not match as strings: osv-scanner reports a package's own tag, and
+        a Composer tag carries a leading `v`.
+        """
+        want = parse_version(version)
+        for node in self.by_pkg.get((ecosystem, norm_name(ecosystem, name)), []):
+            if parse_version(node.get("version")) == want:
+                return node
+        return None
 
 
 def reachability(consumers):
@@ -469,6 +487,32 @@ def osv_fix_target(vuln, package, installed):
     return lowest(higher) or highest(candidates)
 
 
+def osv_projects(consumers, owner, coverage, source, eco, name, version, fixed,
+                 band, malware):
+    """Which projects an osv-scanner hit belongs to.
+
+    A transitive package has no node of its own, so it is attributed to the project
+    that owns the lockfile, never to the lockfile's own path: that path is not a
+    project and counting it as one reports more projects affected than exist.
+    """
+    pairs = consumers or ([(owner, {"rel": "depends_on", "direct": False})] if owner else [])
+    if pairs:
+        return [{"path": project["path"], "name": project["name"],
+                 "rel": edge["rel"], "direct": bool(edge.get("direct")),
+                 "stale_days": project.get("stale_days"),
+                 "deps_installed": project.get("install_state") or {},
+                 "band": project_band(band, project, malware),
+                 "fix": fix_command(eco, project, name, fixed),
+                 "dependabot": dependabot_state(coverage, project, name),
+                 "build": project.get("build_policy")}
+                for project, edge in pairs]
+    directory = str(Path(source).parent) if source else ""
+    return [{"path": directory, "name": Path(directory).name if directory else name,
+             "rel": "depends_on", "direct": False, "stale_days": None,
+             "fix": f"upgrade {name} (currently {version})",
+             "dependabot": {"state": "unknown"}}]
+
+
 def ingest_osv(path, index, coverage=None):
     """Merge `osv-scanner --format json`: the full advisory history, not just the window."""
     try:
@@ -497,12 +541,23 @@ def ingest_osv(path, index, coverage=None):
                 for vid in group.get("ids") or []:
                     worst[vid] = score
 
-            node_id = f"pkg:{eco}:{name}@{version}"
-            consumers = index.consumers(node_id)
-            reach = reachability(consumers) if consumers else {
-                "runtime": True, "ci_only": False, "dev_only": False,
-                "active": True, "runtime_active": True,
-                "on_disk": True, "not_installed": False}
+            node = index.package_node(eco, name, version)
+            consumers = index.consumers(node["id"]) if node else []
+            # osv-scanner resolves transitive dependencies the manifest never names, so
+            # a package with no node of its own belongs to the project that owns the
+            # file it was found in.
+            owner = index.project_at(str(Path(source).parent)) if source else None
+            # Key on the graph's spelling of the version so the same advisory from the
+            # advisory window and from osv-scanner collapses to one finding.
+            installed = node["version"] if node else version
+            if consumers:
+                reach = reachability(consumers)
+            elif owner:
+                reach = reachability([(owner, {"rel": "depends_on", "direct": False})])
+            else:
+                reach = {"runtime": True, "ci_only": False, "dev_only": False,
+                         "active": True, "runtime_active": True,
+                         "on_disk": True, "not_installed": False}
 
             for vuln in entry.get("vulnerabilities", []) or []:
                 vid = vuln.get("id")
@@ -518,7 +573,7 @@ def ingest_osv(path, index, coverage=None):
                 fixed = osv_fix_target(vuln, name, version)
                 findings.append({
                     "type": "finding", "source": "osv-scanner",
-                    "key": f"{vid}|{eco}:{name}@{version}",
+                    "key": f"{vid}|{eco}:{name}@{installed}",
                     "band": band, "why": why,
                     "advisory": ghsa or vid,
                     "cve": next((a for a in aliases if str(a).startswith("CVE-")), None),
@@ -526,27 +581,14 @@ def ingest_osv(path, index, coverage=None):
                     "malware": malware,
                     "summary": (vuln.get("summary") or vuln.get("details") or "")[:400],
                     "url": f"https://osv.dev/vulnerability/{vid}",
-                    "kev": False, "ecosystem": eco, "package": name, "installed": version,
+                    "kev": False, "ecosystem": eco, "package": name, "installed": installed,
                     "vulnerable_range": "see advisory", "fixed_version": fixed,
                     # Dependabot draws on the GitHub Advisory DB and needs a version to
                     # bump to; without a GHSA id or a published fix it cannot act.
                     "dependabot_reachable": bool(ghsa) and bool(fixed) and not malware,
                     "confident": True, "reach": reach,
-                    "projects": ([{"path": project["path"], "name": project["name"],
-                                   "rel": edge["rel"], "direct": bool(edge.get("direct")),
-                                   "stale_days": project.get("stale_days"),
-                                   "deps_installed": (project.get("install_state")
-                                                      or {}),
-                                   "band": project_band(band, project, malware),
-                                   "fix": fix_command(eco, project, name, fixed),
-                                   "dependabot": dependabot_state(coverage, project, name),
-                                   "build": project.get("build_policy")}
-                                  for project, edge in consumers]
-                                 or [{"path": source, "name": Path(source).parent.name,
-                                      "rel": "depends_on", "direct": False,
-                                      "stale_days": None,
-                                      "fix": f"upgrade {name} (currently {version})",
-                                      "dependabot": {"state": "unknown"}}]),
+                    "projects": osv_projects(consumers, owner, coverage, source, eco,
+                                             name, version, fixed, band, malware),
                 })
     return findings
 
@@ -609,6 +651,64 @@ def dedupe(findings):
     return list(best.values())
 
 
+OSV_FIXTURE = {
+    "nodes": [
+        {"id": "proj:/p", "kind": "project", "path": "/p", "name": "p",
+         "manifests": ["requirements.txt"], "install_state": {"known": True, "present": True}},
+        {"id": "pkg:composer:laravel/framework@12.67.0", "kind": "package",
+         "ecosystem": "composer", "name": "laravel/framework", "version": "12.67.0"},
+        {"id": "pkg:pip:requests@2.25.1", "kind": "package",
+         "ecosystem": "pip", "name": "requests", "version": "2.25.1"},
+    ],
+    "edges": [{"source": "proj:/p", "target": "pkg:composer:laravel/framework@12.67.0",
+               "rel": "depends_on", "direct": True}],
+}
+
+
+def selftest_match():
+    """The two ways an osv-scanner hit used to lose the project it belongs to."""
+    index = Index(OSV_FIXTURE)
+    cases = 0
+
+    # A Composer tag carries a leading v; the graph stores the bare version. Keying on
+    # the raw tag reported the same advisory twice, and the unmatched one was banded as
+    # though the package were installed and reachable.
+    for reported in ("v12.67.0", "12.67.0", "V12.67.0"):
+        node = index.package_node("composer", "laravel/framework", reported)
+        assert node is not None and node["version"] == "12.67.0", reported
+        cases += 1
+    assert index.package_node("composer", "laravel/framework", "12.68.0") is None
+    cases += 1
+
+    # PyPI names are case- and separator-insensitive.
+    assert index.package_node("pip", "Requests", "2.25.1") is not None
+    cases += 1
+
+    # osv-scanner resolves transitive packages the manifest never names. They have no
+    # node, so they belong to the project that owns the file, never to the file: that
+    # path is not a project, and counting it reported more projects than exist.
+    rows = osv_projects([], index.project_at("/p"), {}, "/p/requirements.txt",
+                        "pip", "certifi", "2026.7.22", None, "P2", False)
+    assert [r["path"] for r in rows] == ["/p"], rows
+    assert rows[0]["direct"] is False
+    cases += 2
+
+    # With no project of its own, the directory still stands in for the manifest.
+    rows = osv_projects([], None, {}, "/elsewhere/requirements.txt",
+                        "pip", "certifi", "2026.7.22", None, "P2", False)
+    assert [r["path"] for r in rows] == ["/elsewhere"], rows
+    cases += 1
+
+    # A package the graph knows keeps its real consumers.
+    node = index.package_node("composer", "laravel/framework", "v12.67.0")
+    rows = osv_projects(index.consumers(node["id"]), None, {}, "/p/composer.lock",
+                        "composer", "laravel/framework", "12.67.0", "12.68.0", "P1", False)
+    assert [r["path"] for r in rows] == ["/p"] and rows[0]["direct"] is True, rows
+    cases += 1
+
+    print(f"match selftest ok: {cases} osv-attribution cases")
+
+
 def main():
     ap = argparse.ArgumentParser(description="Match advisories against the machine graph")
     ap.add_argument("--graph")
@@ -623,7 +723,7 @@ def main():
     args = ap.parse_args()
 
     if args.selftest:
-        return selftest()
+        return selftest_match()
     if not (args.graph and args.intel and args.out):
         ap.error("--graph, --intel and --out are required unless --selftest")
 

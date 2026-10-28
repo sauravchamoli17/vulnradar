@@ -54,7 +54,8 @@ while [ $# -gt 0 ]; do
     --title) TITLE="$2"; shift 2 ;;
     --selftest)
       python3 "${SCRIPT_DIR}/vercmp.py" || exit 1
-      exec python3 "${SCRIPT_DIR}/inventory.py" --selftest ;;
+      python3 "${SCRIPT_DIR}/inventory.py" --selftest || exit 1
+      exec python3 "${SCRIPT_DIR}/match.py" --selftest ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown option: $1" >&2; usage; exit 1 ;;
   esac
