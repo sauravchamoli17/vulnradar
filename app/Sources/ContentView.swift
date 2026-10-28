@@ -17,9 +17,16 @@ struct ContentView: View {
     @AppStorage("scheduleEnabled") private var scheduleOn = false
     @AppStorage("scheduleHour") private var scheduleHour = 9
     @AppStorage("scheduleMinute") private var scheduleMinute = 0
+    @AppStorage("ageFilter") private var ageFilter = "all"
+
+    /// Projects after the age filter, used by the list, the detail and the overview
+    /// so every count on screen agrees.
+    private var scoped: [ProjectGroup] {
+        store.projects.compactMap { $0.filtered(age: ageFilter) }
+    }
 
     private var visible: [ProjectGroup] {
-        var list = store.projects
+        var list = scoped
         if let bandFilter { list = list.filter { $0.band == bandFilter } }
         guard !query.isEmpty else { return list }
         let needle = query.lowercased()
@@ -115,10 +122,11 @@ struct ContentView: View {
                     if mode == .graph {
                         GraphPane(focus: selection)
                     } else if let path = selection,
-                              let project = store.projects.first(where: { $0.path == path }) {
+                              let project = scoped.first(where: { $0.path == path }) {
                         ProjectDetail(project: project)
                     } else {
-                        Overview(selection: $selection, bandFilter: $bandFilter)
+                        Overview(selection: $selection, bandFilter: $bandFilter,
+                                 projects: scoped, ageFilter: ageFilter)
                     }
                 }
                 .clipShape(RoundedRectangle(cornerRadius: Theme.panelRadius, style: .continuous))
@@ -140,6 +148,9 @@ struct ContentView: View {
                 searchField
                 Segmented(options: [("urgency", "Urgency", nil), ("folder", "Folder", nil)],
                           selection: $grouping)
+                Segmented(options: [("all", "All", nil), ("recent", "Recent", nil),
+                                    ("backlog", "Backlog", nil)],
+                          selection: $ageFilter)
             }
             .padding(.horizontal, Space.m)
             .padding(.bottom, Space.s)
@@ -331,6 +342,8 @@ struct Overview: View {
     @EnvironmentObject var store: Store
     @Binding var selection: String?
     @Binding var bandFilter: Band?
+    let projects: [ProjectGroup]
+    let ageFilter: String
 
     var body: some View {
         ScrollView {
@@ -338,6 +351,7 @@ struct Overview: View {
                 if store.findings == nil {
                     emptyState
                 } else {
+                    malwareBanner
                     header
                     tiles
                     if !topRisks.isEmpty { risks }
@@ -366,11 +380,60 @@ struct Overview: View {
         .frame(maxWidth: .infinity).padding(.top, 90)
     }
 
+    /// Known-malicious packages and suspicious install hooks are a different class of
+    /// problem from an out-of-date dependency, so they lead rather than queue.
+    @ViewBuilder
+    private var malwareBanner: some View {
+        let malware = store.findings?.malware ?? []
+        let alerts = store.findings?.alerts ?? []
+        if !malware.isEmpty || !alerts.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(spacing: 7) {
+                    Image(systemName: "exclamationmark.octagon.fill")
+                        .font(.system(size: 13)).foregroundStyle(Band.p0.tint)
+                    Text(malware.isEmpty
+                         ? "\(alerts.count) suspicious install hook(s)"
+                         : "\(malware.count) known-malicious package(s) installed")
+                        .font(TypeScale.title).foregroundStyle(Theme.text)
+                }
+                Text(malware.isEmpty
+                     ? "Lifecycle scripts run automatically on install. Read each one "
+                       + "before running a build in these projects."
+                     : "A MAL-* advisory marks the package itself as malicious. Treat it "
+                       + "as a compromise: quarantine the project, do not install or "
+                       + "build, and rotate any credential reachable from it.")
+                    .font(TypeScale.body).foregroundStyle(Theme.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(malware.prefix(4), id: \.self) { item in
+                    Text("· \(item.package) \(item.installed) — \(item.advisory ?? "")")
+                        .font(TypeScale.mono).foregroundStyle(Band.p0.tint)
+                }
+                ForEach(Array(alerts.prefix(4).enumerated()), id: \.offset) { _, alert in
+                    Text("· \(alert.name ?? "") — \(alert.hook ?? "") \(alert.why ?? "")")
+                        .font(TypeScale.mono).foregroundStyle(Band.p0.tint)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Band.p0.tint.opacity(0.12)))
+            .overlay(RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(Band.p0.tint.opacity(0.45), lineWidth: 1))
+        }
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: Space.xs) {
             Text(store.headline).font(TypeScale.heading).tracking(-0.3)
                 .foregroundStyle(Theme.text)
             Text(store.subhead).font(TypeScale.body).foregroundStyle(Theme.secondary)
+            if ageFilter != "all" {
+                Text(ageFilter == "recent"
+                     ? "Showing only advisories disclosed inside the window."
+                     : "Showing only older advisories found by osv-scanner.")
+                    .font(TypeScale.caption).foregroundStyle(Band.p1.tint)
+            }
         }
     }
 
@@ -378,7 +441,9 @@ struct Overview: View {
     private var tiles: some View {
         HStack(spacing: Space.s + 2) {
             ForEach(Band.allCases, id: \.self) { band in
-                let count = store.findings?.count(band) ?? 0
+                let count = ageFilter == "all"
+                    ? (store.findings?.count(band) ?? 0)
+                    : projects.reduce(0) { $0 + $1.count(band) }
                 let active = bandFilter == band
                 Button {
                     bandFilter = active ? nil : band
@@ -414,7 +479,7 @@ struct Overview: View {
     }
 
     private var topRisks: [ProjectGroup] {
-        Array(store.projects.filter { $0.band <= .p1 }.prefix(7))
+        Array(projects.filter { $0.band <= .p1 }.prefix(7))
     }
 
     private var risks: some View {

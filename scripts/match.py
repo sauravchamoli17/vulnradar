@@ -330,6 +330,34 @@ def ingest_osv(path, index, coverage=None):
     return findings
 
 
+def code_alerts(index):
+    """Things found by reading the code itself, not by matching an advisory."""
+    out = []
+    for node in index.nodes.values():
+        if node.get("kind") != "project":
+            continue
+        for risky in node.get("risky_scripts") or []:
+            out.append({
+                "kind": "lifecycle-script",
+                "project": node.get("path"),
+                "name": node.get("name"),
+                "hook": risky["hook"],
+                "command": risky["command"],
+                "why": risky["why"],
+            })
+    return out
+
+
+def install_script_summary(index):
+    total = {}
+    for node in index.nodes.values():
+        if node.get("kind") != "project":
+            continue
+        for entry in node.get("install_script_packages") or []:
+            total.setdefault(entry, []).append(node.get("path"))
+    return total
+
+
 def dedupe(findings):
     best = {}
     order = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
@@ -386,6 +414,8 @@ def main():
     leads.sort(key=lambda l: (l.get("added") or ""), reverse=True)
 
     counts = {band: sum(1 for f in findings if f["band"] == band) for band in order}
+    alerts = code_alerts(index)
+    malware = [f for f in findings if f.get("malware")]
     payload = {
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "graph_generated_at": graph.get("generated_at"),
@@ -398,6 +428,9 @@ def main():
         "had_previous_state": bool(previous),
         "findings": findings,
         "leads": leads,
+        "alerts": alerts,
+        "malware": malware,
+        "install_scripts": install_script_summary(index),
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -407,6 +440,14 @@ def main():
         print(f"findings: {len(findings)} "
               f"(P0={counts['P0']} P1={counts['P1']} P2={counts['P2']} P3={counts['P3']})")
         print(f"kev host leads: {len(leads)} (unverified, need a version check)")
+        installs = install_script_summary(index)
+        if malware:
+            print(f"!! MALICIOUS PACKAGES: {len(malware)} MAL-* advisory match(es)")
+        if alerts:
+            print(f"!! suspicious lifecycle scripts: {len(alerts)}")
+        if not malware and not alerts:
+            print(f"malicious-code check: clean "
+                  f"({len(installs)} dependency install script(s) present)")
         if previous:
             print(f"new since last run: {sum(1 for f in findings if f['new'])}")
     return 0

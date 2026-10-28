@@ -113,6 +113,25 @@ that is a compromise, not a patch. Follow the escalation steps in `steady-supply
   qualifiers and Go pseudo-versions; `--selftest` covers the cases that matter, and anything
   unparseable is skipped rather than guessed at.
 
+## Malicious code
+
+Every run also checks for compromise rather than just staleness, and the report leads with
+it:
+
+- **Known-malicious packages** — `MAL-*` advisories via osv-scanner, which ingests the
+  OpenSSF malicious-packages feed. A hit is a compromise, not a patch: quarantine, do not
+  install or build, rotate every credential reachable from the project.
+- **Suspicious lifecycle hooks** — `preinstall`/`install`/`postinstall`/`prepare` in the
+  user's own manifests, matched against a deliberately narrow pattern list (pipe-to-shell,
+  `eval` of decoded data, bare-IP URLs, `/dev/tcp`, env vars beside a network call). A hook
+  that runs `node scripts/build.js` is ordinary and is not flagged.
+- **Dependencies that run install scripts** — counted, not alarmed about. Normal, but it is
+  where payloads fire.
+
+Limitation worth stating when reporting: install-script detection reads `hasInstallScript`
+from `package-lock.json`, so pnpm and yarn projects contribute nothing to that count. The
+`MAL-*` check is unaffected and covers every ecosystem osv-scanner supports.
+
 ## Dependabot
 
 These advisories come from the GitHub Advisory Database, the same source Dependabot uses, so

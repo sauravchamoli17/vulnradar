@@ -101,11 +101,23 @@ struct Intel: Decodable {
     let auth: String?
 }
 
+struct CodeAlert: Decodable, Hashable {
+    let kind: String
+    let project: String?
+    let name: String?
+    let hook: String?
+    let command: String?
+    let why: String?
+}
+
 struct Findings: Decodable {
     let generatedAt: String?
     let counts: [String: Int]?
     let findings: [Finding]
     let leads: [Lead]?
+    let alerts: [CodeAlert]?
+    let malware: [Finding]?
+    let installScripts: [String: [String]]?
     let graphStats: GraphStats?
     let intel: Intel?
 
@@ -168,6 +180,15 @@ struct ProjectGroup: Identifiable, Hashable {
             lines.append(item.fix)
         }
         return lines.joined(separator: "\n")
+    }
+
+    /// A copy holding only the items matching an age filter, or nil when none do.
+    func filtered(age: String) -> ProjectGroup? {
+        guard age != "all" else { return self }
+        let keep = items.filter { age == "recent" ? $0.viaWindow : $0.viaOSV }
+        guard !keep.isEmpty else { return nil }
+        return ProjectGroup(path: path, name: name, staleDays: staleDays,
+                            items: keep, dependabot: dependabot)
     }
 
     static func build(from findings: [Finding]) -> [ProjectGroup] {

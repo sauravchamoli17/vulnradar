@@ -199,6 +199,41 @@ def render_markdown(data, rows, projects, home, nodes):
         w(f"- ⚠️ feed warning: {err}")
     w("")
 
+    malware = data.get("malware") or []
+    alerts = data.get("alerts") or []
+    installs = data.get("install_scripts") or {}
+    w("## Malicious code check")
+    w("")
+    if malware:
+        w(f"### ⚠️ {len(malware)} KNOWN-MALICIOUS PACKAGE(S) INSTALLED")
+        w("")
+        w("A `MAL-*` advisory means the ecosystem has marked this package itself as "
+          "malicious. Treat it as a compromise, not a patch: quarantine the project, "
+          "do not run installs or builds, and rotate any credential reachable from it.")
+        w("")
+        for item in malware[:20]:
+            w(f"- `{item['package']}@{item['installed']}` — {item.get('advisory')} "
+              f"in {', '.join(short(p['path'], home) for p in item['projects'][:3])}")
+        w("")
+    if alerts:
+        w(f"### ⚠️ {len(alerts)} suspicious install hook(s)")
+        w("")
+        w("Lifecycle scripts run automatically on `npm install`. These matched patterns "
+          "associated with supply-chain payloads — read each one before installing.")
+        w("")
+        for alert in alerts[:20]:
+            w(f"- `{short(alert['project'], home)}` — **{alert['hook']}** "
+              f"{alert['why']}")
+            w(f"  ```")
+            w(f"  {alert['command']}")
+            w(f"  ```")
+        w("")
+    if not malware and not alerts:
+        w("No known-malicious packages (`MAL-*`) and no suspicious lifecycle scripts "
+          f"in your own manifests. {len(installs)} dependency(ies) run install scripts, "
+          "which is normal but is where supply-chain payloads fire.")
+        w("")
+
     if not rows and not leads:
         w("## No action needed")
         w("")

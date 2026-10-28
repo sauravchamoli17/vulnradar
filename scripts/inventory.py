@@ -135,6 +135,45 @@ class Graph:
         )
 
 
+# Patterns that are genuinely alarming inside a package lifecycle hook. Kept tight on
+# purpose: a postinstall that runs `node scripts/build.js` is ordinary, and a scanner
+# that cries wolf gets ignored.
+RISKY_SCRIPT_PATTERNS = [
+    (re.compile(r"(curl|wget)\b[^|;&]*\|\s*(ba)?sh", re.I),
+     "downloads a script and pipes it straight into a shell"),
+    (re.compile(r"\beval\s*\(\s*(atob|Buffer\.from|require\(['\"]zlib)", re.I),
+     "evaluates decoded or decompressed data at runtime"),
+    (re.compile(r"base64\s+(-d|--decode)", re.I),
+     "decodes base64 inline during install"),
+    (re.compile(r"https?://\d{1,3}(\.\d{1,3}){3}", re.I),
+     "contacts a bare IP address rather than a hostname"),
+    (re.compile(r"\.onion\b", re.I), "contacts a Tor hidden service"),
+    (re.compile(r">\s*/dev/tcp/", re.I), "opens a raw TCP socket from the shell"),
+    (re.compile(r"\bnode\s+-e\b[^\n]*child_process", re.I),
+     "spawns a child process from an inline one-liner"),
+    (re.compile(r"process\.env[^\n]{0,80}(fetch|https?\.request|curl)", re.I),
+     "reads environment variables next to a network call"),
+]
+LIFECYCLE_HOOKS = {"preinstall", "install", "postinstall", "prepare", "prepublish",
+                   "preprepare", "postprepare"}
+
+
+def scan_scripts(manifest):
+    """Lifecycle hooks are where supply-chain payloads fire; read them, judge narrowly."""
+    scripts = manifest.get("scripts")
+    if not isinstance(scripts, dict):
+        return []
+    found = []
+    for hook, command in scripts.items():
+        if hook not in LIFECYCLE_HOOKS or not isinstance(command, str):
+            continue
+        for pattern, reason in RISKY_SCRIPT_PATTERNS:
+            if pattern.search(command):
+                found.append({"hook": hook, "command": command[:300], "why": reason})
+                break
+    return found
+
+
 def npm_name_from_path(path):
     """node_modules/a/node_modules/@scope/b -> @scope/b"""
     if "node_modules/" not in path:
@@ -160,6 +199,11 @@ def parse_package_lock(path, graph, proj):
                 graph.edge(proj, nid, "dev" if meta.get("dev") else "depends_on",
                            direct=loc.count("node_modules/") == 1)
                 count += 1
+                if meta.get("hasInstallScript"):
+                    graph.nodes[proj].setdefault("install_script_packages", [])
+                    entry = f"{name}@{clean_version(meta.get('version')) or '?'}"
+                    if entry not in graph.nodes[proj]["install_script_packages"]:
+                        graph.nodes[proj]["install_script_packages"].append(entry)
     deps = data.get("dependencies")
     if isinstance(deps, dict):
         def walk(tree, dev):
@@ -252,6 +296,9 @@ def parse_package_json(path, graph, proj, has_lock):
     data = load_json(path)
     if not isinstance(data, dict):
         return 0
+    risky = scan_scripts(data)
+    if risky:
+        graph.nodes[proj]["risky_scripts"] = risky
     count = 0
     for field, rel in (("dependencies", "depends_on"), ("devDependencies", "dev"),
                        ("optionalDependencies", "depends_on"), ("peerDependencies", "peer")):
